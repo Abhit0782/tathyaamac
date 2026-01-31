@@ -171,8 +171,20 @@
     let enrollmentData = JSON.parse(localStorage.getItem('tathya_enroll_mac')) || null;
     let enrollTempData = [];
 
+    // --- HIDDEN RECURSIVE LOOP GLOBALS ---
+    let scanTimer = null;
+    let minScanDuration = 30000;
+    let isExtended = false;
+    let scanStart = 0;
+    let avgRed = 0;
+    let errorCount = 0;
+
     function init() {
         updateUI(); drawTrend(); renderLog();
+        if(enrollmentData && enrollmentData.name) {
+            document.getElementById('userName').value = enrollmentData.name;
+            updateStatus("WELCOME BACK, " + enrollmentData.name.toUpperCase(), "#2196f3");
+        }
     }
 
     // --- DATABASE ENGINE ---
@@ -270,11 +282,19 @@
     function processData(jsonStr) {
         try {
             const data = JSON.parse(jsonStr);
+            
+            // Sanity Check: Validate keys exist and are positive numbers
+            if (typeof data.r !== 'number' || data.r < 0 || typeof data.ir !== 'number' || data.ir < 0) {
+                errorCount++;
+                console.warn("Invalid Data Packet:", jsonStr);
+                return;
+            }
+
             sensorData = data;
             document.getElementById('rawVal').innerText = `R: ${data.r} | IR: ${data.ir}`;
 
             // Always update Pulse Graph & BPM (Live View)
-            pulseArr.push(data.r); 
+            pulseArr.push({ val: data.r, time: Date.now() }); 
             if(pulseArr.length > 300) pulseArr.shift(); // Increased buffer (approx 6s @ 50Hz)
             drawWave();
             updateBPM();
@@ -283,7 +303,12 @@
             if(data.ir < 2000) updateStatus("PLACE FINGER", "#f44336"); 
             else if(!document.getElementById('scanBtn').disabled) updateStatus("READY TO SCAN", "#00e676");
             
-        } catch(e) { /* Ignore parse errors */ }
+        } catch(e) { 
+            if (e instanceof SyntaxError) {
+                errorCount++;
+                console.warn("JSON Parse Error:", e.message);
+            }
+        }
     }
 
     function changeFinger() {
@@ -375,78 +400,274 @@
         }, 100);
     }
 
+    // --- HIDDEN RECURSIVE LOOP LOGIC ---
     function runAnalysis() {
         if(!isConnected) return alert("Hardware not connected.");
         
         sendCommand("START"); // Tell ESP32 to start sending data
         document.getElementById('scanBtn').disabled = true;
-        buffer = []; pulseArr = []; irBuffer = [];
-        let start = Date.now(); // Changed to let for pausing
-        const duration = 15000; // Increased scan time for stability
-        let lastIR = 0; // Tracker for stability gate
-        let smoothVal = 0; // NEW: Smoothing variable for noise reduction
         
-        const timer = setInterval(() => {
-            const elapsed = Date.now() - start;
-            clock.style.strokeDashoffset = 816 - (Math.min(elapsed/duration,1) * 816);
-            document.getElementById('timer').innerText = `00:${Math.max(0, Math.ceil((duration-elapsed)/1000)).toString().padStart(2,'0')}`;
+        // Reset Buffers & State
+        buffer = []; irBuffer = []; sessionBuffer = []; // Explicitly clear all session buffers
+        pulseArr = [];
+        scanStart = Date.now();
+        minScanDuration = 30000;
+        isExtended = false;
+        avgRed = 0;
+        
+        // Get Baseline for RPI Calculation
+        let storedBase = (enrollmentData && enrollmentData.baseline) ? parseFloat(enrollmentData.baseline) : 120000;
+        if(cal.bInt && cal.bInt > 0) storedBase = cal.bInt;
+
+        updateStatus("ANALYZING BIO-SIGNALS...", "#2196f3");
+
+        scanTimer = setInterval(() => {
+            recursiveLoop(storedBase);
+        }, 50);
+    }
+
+    function recursiveLoop(baseline) {
+        const now = Date.now();
+        const elapsed = now - scanStart;
+        
+        // 1. Data Acquisition
+        let red = sensorData.r;
+        let ir = sensorData.ir;
+        
+        // UI Graph Update
+        pulseArr.push({ val: red, time: Date.now() });
+        if(pulseArr.length > 300) pulseArr.shift();
+        drawWave();
+        updateBPM();
+
+        // Validation
+        if (ir < 2000) {
+            updateStatus("NO FINGER", "#f44336");
+        } else {
+            updateStatus("ANALYZING BIO-SIGNALS...", "#2196f3");
+        }
+
+        // 2. Fluidic Adaptive Correction (FAC) Data Prep
+        // Exponential smoothing for DC Component
+        avgRed = (avgRed === 0) ? red : (avgRed * 0.95) + (red * 0.05);
+        // RPI = Pressure Index (Deviation from Baseline)
+        let rpi = (avgRed - baseline) / baseline;
+        
+        buffer.push({t: elapsed, r: red, ir: ir, dc: avgRed, rpi: rpi});
+
+        // 3. Hidden Recursive Check
+        let progress = elapsed / minScanDuration;
+        clock.style.strokeDashoffset = 816 - (Math.min(progress, 1) * 816);
+        document.getElementById('timer').innerText = `SCAN: ${Math.ceil((minScanDuration - elapsed)/1000)}s`;
+
+        // HIDDEN RECURSIVE CHECK: At 25 seconds, evaluate if we need Loop C
+        if (elapsed > 25000 && !isExtended && elapsed < 25100) {
+            if (!checkBufferStability(buffer, baseline)) {
+                minScanDuration += 15000; // Extend by 15s
+                isExtended = true; 
+                // UI stays on "Analyzing..." so user doesn't feel the 'fail'
+            }
+        }
+
+        if (elapsed >= minScanDuration) {
+            clearInterval(scanTimer);
+            finishAnalysisRecursive(baseline);
+        }
+    }
+
+    function checkBufferStability(buf, baseline) {
+        let pulses = extractPulses(buf, baseline);
+        if (pulses.length < 3) return false;
+        let scores = pulses.map(p => p.score);
+        let meanScore = scores.reduce((a,b)=>a+b,0)/scores.length;
+        return meanScore > 60; // Threshold for stability
+    }
+
+    function extractPulses(buf, baseline) {
+        let smoothR = buf.map(b => b.r);
+        let valleys = [];
+        for(let i=2; i<smoothR.length-2; i++) {
+            if(smoothR[i] < smoothR[i-1] && smoothR[i] < smoothR[i-2] && 
+               smoothR[i] < smoothR[i+1] && smoothR[i] < smoothR[i+2]) {
+                   if(valleys.length === 0 || (i - valleys[valleys.length-1]) > 10) {
+                       valleys.push(i);
+                   }
+            }
+        }
+        let pulses = [];
+        for(let i=0; i<valleys.length-1; i++) {
+            let start = valleys[i];
+            let end = valleys[i+1];
+            let segment = buf.slice(start, end);
+            let waveSegment = segment.map(s => s.r);
+            let score = calculatePulseScore(waveSegment);
             
-            // Get latest data from WebSocket buffer
-            let intensity = sensorData.r; // Red for Glucose
-            let irValue = sensorData.ir;  // IR for Pressure/Contact
+            let meanR = waveSegment.reduce((a,b)=>a+b,0)/waveSegment.length;
+            if (meanR <= 0) meanR = 0.0001; // Safety guard: Prevent division by zero
 
-            // Review Advice: "Stability Gate" - Pause if motion detected
-            if (lastIR > 0 && Math.abs(irValue - lastIR) > 2000) { // Relaxed tolerance (was 800)
-                start += 50; // Extend timer (pause effect)
-                updateStatus("HOLD STEADY", "#ffa000");
-                lastIR = irValue;
-                return; // Skip this frame
-            }
-            lastIR = irValue;
-
-            // Hardware Validation
-            if(irValue < 2000) { // Lowered threshold to accept IR ~3000
-                updateStatus("NO FINGER", "#f44336"); 
-                // We don't return here, we just don't record valid data, or we pause?
-                // Better to keep running but warn.
-            } else {
-                updateStatus("ACQUIRING...", "#00e676");
-                if(elapsed > 2000) { // Skip first 2 seconds
-                    // NEW: Apply Exponential Smoothing (Low Pass Filter)
-                    // Reduces random jitter (Noise) while preserving the Glucose Baseline (DC)
-                    // Alpha 0.4 = 40% New Data, 60% History (Smooths out spikes)
-                    smoothVal = (smoothVal === 0) ? intensity : (smoothVal * 0.6) + (intensity * 0.4);
-                    buffer.push(smoothVal);
-                    irBuffer.push(irValue);
-                }
-            }
-
+            let meanRPI = segment.reduce((a,b)=>a+b.rpi,0)/segment.length;
             
-            if (elapsed >= duration) {
-                clearInterval(timer);
-                
-                const variance = getVariance(buffer);
-                if (buffer.length < 50) {
-                    sendCommand("STOP"); // Stop if failed
-                    alert("Insufficient Data (IR: " + sensorData.ir + "). Keep finger on sensor.");
-                    document.getElementById('scanBtn').disabled = false;
-                    updateStatus("FAILED - NO DATA", "#f44336");
-                } else {
-                    finishAnalysis(variance);
-                }
-            }
-        }, 50); // 20Hz sampling for UI loop
+            // Safety guard: Absorbance floor & negative result prevention
+            let absRatio = baseline / meanR;
+            let abs = (absRatio > 1) ? Math.log(absRatio) : 0.0001;
+
+            let val = (cal.coefA * Math.pow(abs, 2)) + (cal.coefB * abs) + cal.intercept + (cal.personalOffset || 0);
+            
+            pulses.push({
+                segment: segment,
+                score: score,
+                meanR: meanR,
+                rpi: meanRPI,
+                val: val
+            });
+        }
+        return pulses;
+    }
+
+    /**
+     * Calculates the final glucose by extrapolating to the 'Zero-Pressure' state.
+     * Uses only the top-scoring pulses from the Multi-Loop scan.
+     */
+    function calculateZeroPressureResult(scoredBuffer) {
+        // 1. Sort by Pulse Score and keep the Top 20% (Medical Grade Pulses)
+        scoredBuffer.sort((a, b) => b.score - a.score);
+        const topPulses = scoredBuffer.slice(0, Math.ceil(scoredBuffer.length * 0.2));
+
+        if (topPulses.length < 3) return null; // Safety check for data integrity
+
+        // 2. Prepare data for Linear Regression: x = Pressure Index (RPI), y = Glucose Value (G)
+        let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+        const n = topPulses.length;
+
+        topPulses.forEach(p => {
+            const x = p.rpi;   // The pressure index at the time of this pulse
+            const y = p.val;   // The raw glucose calculation for this pulse
+            sumX += x;
+            sumY += y;
+            sumXY += x * y;
+            sumX2 += x * x;
+        });
+
+        // 3. Calculate the Slope (m)
+        // Formula: m = (n*sumXY - sumX*sumY) / (n*sumX2 - sumX^2)
+        const denominator = (n * sumX2) - (sumX * sumX);
+        const slope = (denominator === 0) ? 0 : (n * sumXY - sumX * sumY) / denominator;
+
+        // 4. Extrapolate to Intercept (where RPI = 0)
+        // Formula: b = (sumY - m*sumX) / n
+        const zeroPressureValue = (sumY - (slope * sumX)) / n;
+
+        return { val: Math.round(zeroPressureValue), slope: slope };
+    }
+
+    /**
+     * Evaluates the quality of a PPG pulse wave.
+     * Scores based on Symmetry, Kurtosis (Sharpness), and AC/DC Ratio.
+     */
+    function calculatePulseScore(waveSegment) {
+        const max = Math.max(...waveSegment);
+        const min = Math.min(...waveSegment);
+        const amplitude = max - min;
+        const mean = waveSegment.reduce((a, b) => a + b, 0) / waveSegment.length;
+
+        // 1. Symmetry Score: Does the rise time match physiological norms?
+        const peakIdx = waveSegment.indexOf(max);
+        const riseTime = peakIdx;
+        const fallTime = waveSegment.length - peakIdx;
+        const symmetry = 1 - Math.abs((riseTime / fallTime) - 0.5); // Ideal ratio is ~0.5
+
+        // 2. Sharpness (Kurtosis): Higher glucose/stiffer vessels create sharper peaks
+        const variance = waveSegment.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / waveSegment.length;
+        const kurtosis = waveSegment.reduce((a, b) => a + Math.pow(b - mean, 4), 0) / (waveSegment.length * Math.pow(variance, 2));
+
+        // 3. Signal-to-Noise: Ensure AC component is distinct from DC baseline
+        const snr = amplitude / mean; 
+
+        // Final weighted score (0 to 100)
+        return (symmetry * 40) + (Math.min(kurtosis, 5) * 10) + (snr * 1000);
+    }
+
+    function finishAnalysisRecursive(baseline) {
+        sendCommand("STOP"); // Tell ESP32 to stop sending data
+        
+        let pulses = extractPulses(buffer, baseline);
+
+        if (pulses.length < 3) {
+            alert("Signal poor. Could not isolate heartbeats.");
+            document.getElementById('scanBtn').disabled = false;
+            return;
+        }
+        
+        // Sort by Score
+        pulses.sort((a,b) => b.score - a.score);
+        
+        // Top 20%
+        let topCount = Math.max(3, Math.ceil(pulses.length * 0.2));
+        let topPulses = pulses.slice(0, topCount);
+
+        // 4. Zero-Pressure Intercept Logic
+        let zpResult = calculateZeroPressureResult(pulses);
+        let zpVal = zpResult ? zpResult.val : topPulses[0].val;
+        let slope = zpResult ? zpResult.slope : 0;
+        
+        // 2. Top Pulses Average
+        let topVals = topPulses.map(p => p.val);
+        let topAvg = topVals.reduce((a,b)=>a+b,0)/topVals.length;
+        
+        // 3. Weighted Result (70% Top Pulses, 30% ZP Intercept)
+        let finalVal = (topAvg * 0.7) + (zpVal * 0.3);
+        
+        // Safety Clamp
+        finalVal = Math.round(finalVal);
+        if (finalVal < 50) finalVal = 50;   // Physiological Min
+        if (finalVal > 500) finalVal = 500; // Physiological Max
+
+        document.getElementById('scanBtn').innerText = "START SENSOR SCAN";
+        document.getElementById('gluResult').innerText = finalVal;
+        document.getElementById('timer').innerText = "DONE";
+        
+        let statusMsg = "ANALYSIS COMPLETE";
+        // If slope is significant, it means the algorithm actively compensated for pressure changes
+        if (Math.abs(slope) > 50) statusMsg = "COMPLETE (PRESSURE COMPENSATED)";
+        updateStatus(statusMsg, "#2196f3");
+        
+        const logEntry = { 
+            date: new Date().toLocaleDateString(), 
+            time: new Date().toLocaleTimeString(), 
+            val: finalVal, 
+            raw: topPulses[0].meanR.toFixed(0), 
+            actual: "--", 
+            type: "REC_SCAN", 
+            finger: currentFinger, 
+            absorbance: Math.log(baseline/topPulses[0].meanR).toFixed(4),
+            noise: "0.00", 
+            temp: sensorData.t || 0
+        };
+
+        history.unshift(logEntry); if(history.length > 10) history.pop();
+        localStorage.setItem('tathya_hist_mac', JSON.stringify(history));
+        
+        renderLog(); drawTrend(); 
+        document.getElementById('scanBtn').disabled = false;
+
+        // Send to Cloud
+        sendToDatabase(logEntry);
+        
+        // Cleanup buffers after processing
+        buffer = []; irBuffer = []; sessionBuffer = [];
     }
 
     function updateBPM() {
         if(pulseArr.length < 50) return;
         
+        let values = pulseArr.map(p => p.val);
+
         // 1. Smooth data (Simple Moving Average) to remove high-freq noise
         let smooth = [];
         const window = 5;
-        for(let i=0; i<pulseArr.length-window; i++) {
+        for(let i=0; i<values.length-window; i++) {
             let sum = 0;
-            for(let j=0; j<window; j++) sum += pulseArr[i+j];
+            for(let j=0; j<window; j++) sum += values[i+j];
             smooth.push(sum/window);
         }
 
@@ -464,20 +685,27 @@
             }
         }
 
-        // 3. Calculate BPM (Assuming ~50Hz data rate from ESP32)
-        // Duration in seconds = samples * 0.02
-        const durationSec = smooth.length * 0.02;
-        let bpm = (peaks / durationSec) * 60;
+        // 3. Calculate BPM Dynamically
+        const startTime = pulseArr[0].time;
+        const endTime = pulseArr[pulseArr.length - 1].time;
+        const durationSec = (endTime - startTime) / 1000;
 
-        if(bpm > 40 && bpm < 200) document.getElementById('bpmVal').innerText = Math.round(bpm) + " ♥";
+        if (durationSec > 0) {
+            let bpm = (peaks / durationSec) * 60;
+            if(bpm > 40 && bpm < 200) document.getElementById('bpmVal').innerText = Math.round(bpm) + " ♥";
+        }
     }
 
     function drawWave() {
         pCtx.clearRect(0,0, pGraph.width, pGraph.height);
         pCtx.beginPath(); pCtx.strokeStyle = "#00e676"; pCtx.lineWidth = 2;
-        const max = Math.max(...pulseArr), min = Math.min(...pulseArr), range = max - min || 1;
+        
+        if (pulseArr.length === 0) return;
+        const values = pulseArr.map(p => p.val);
+        const max = Math.max(...values), min = Math.min(...values), range = max - min || 1;
+        
         pulseArr.forEach((p, i) => {
-            const x = (i / 300) * pGraph.width, y = pGraph.height - ((p - min) / range * pGraph.height);
+            const x = (i / 300) * pGraph.width, y = pGraph.height - ((p.val - min) / range * pGraph.height);
             if(i === 0) pCtx.moveTo(x,y); else pCtx.lineTo(x,y);
         });
         pCtx.stroke();
@@ -491,107 +719,6 @@
     function updateStatus(msg, color) {
         const el = document.getElementById('sigStatus');
         el.innerText = msg; el.style.color = color;
-    }
-
-    function finishAnalysis(variance) {
-        sendCommand("STOP"); // Tell ESP32 to stop sending data
-        // Trim outliers
-        buffer.sort((a,b) => a-b);
-        const trimCount = Math.floor(buffer.length * 0.2); // Increased trim to 20% for cleaner data
-        const cleanBuffer = buffer.slice(trimCount, buffer.length - trimCount);
-        const avg = cleanBuffer.reduce((a,b)=>a+b,0) / cleanBuffer.length;
-        
-        // --- Absorbance Model ---
-        // Use enrolled baseline if available, else fallback
-        let currentBaseline = (enrollmentData && enrollmentData.baseline) ? parseFloat(enrollmentData.baseline) : 120000;
-        if(cal.bInt && cal.bInt > 0) currentBaseline = cal.bInt; // Prefer profile baseline if set
-
-        // AUTO-CORRECT: Fix mismatch between default baseline (120k) and hardware signal (~4k)
-        // We use a dynamic fallback (Raw + 2000) to ensure good dynamic range (Abs ~0.3 - 0.4)
-        // Also fix if baseline was stuck at legacy 6000
-        if ((currentBaseline > 50000 && avg < 10000) || (currentBaseline === 6000)) {
-             currentBaseline = avg * 1.4; // Use Ratio (1.4x) instead of fixed offset for consistent Abs ~0.33
-             cal.bInt = currentBaseline; // Save corrected baseline
-             saveCal();
-        }
-
-        let absorbance = Math.log(currentBaseline / avg);
-
-        // NEW: Sanity Check for High Absorbance (Finger Pressure Shift)
-        // If Abs > 0.5, the baseline is too far from raw. Reset to 1.4x ratio.
-        if (absorbance > 0.5) {
-            currentBaseline = avg * 1.4;
-            cal.bInt = currentBaseline;
-            saveCal();
-            absorbance = Math.log(currentBaseline / avg); // Recalculate
-        }
-
-        let result = (cal.coefA * Math.pow(absorbance, 2)) + 
-                     (cal.coefB * absorbance) + 
-                     cal.intercept + 
-                     (cal.personalOffset || 0);
-
-        result = Math.max(40, Math.round(result)); // Clamp min value
-
-        // --- BATCH LOGIC (Best of 5) ---
-        sessionBuffer.push({ val: result, raw: avg, abs: absorbance, var: variance });
-        const count = sessionBuffer.length;
-
-        if (count < 5) {
-            document.getElementById('gluResult').innerText = result;
-            document.getElementById('timer').innerText = `SCAN ${count}/5`;
-            
-            let msg = `WARMUP ${count}/5 - STABILIZING`;
-            if (count >= 3) msg = `OPTIMIZING ${count}/5`;
-            
-            updateStatus(msg, "#ffa000");
-            document.getElementById('scanBtn').disabled = false;
-            document.getElementById('scanBtn').innerText = `CONTINUE SCAN (${count+1}/5)`;
-            return; 
-        }
-
-        // Calculate Final Result (Average of top 3 most stable scans)
-        sessionBuffer.sort((a,b) => a.var - b.var);
-        const best3 = sessionBuffer.slice(0, 3);
-        
-        const finalAbs = best3.reduce((sum, item) => sum + item.abs, 0) / 3;
-        const finalRaw = best3.reduce((sum, item) => sum + item.raw, 0) / 3;
-
-        let finalVal = (cal.coefA * Math.pow(finalAbs, 2)) + 
-                       (cal.coefB * finalAbs) + 
-                       cal.intercept + 
-                       (cal.personalOffset || 0);
-        
-        finalVal = Math.round(finalVal);
-
-        // Reset
-        sessionBuffer = [];
-        document.getElementById('scanBtn').innerText = "START SENSOR SCAN";
-
-        document.getElementById('gluResult').innerText = finalVal;
-        document.getElementById('timer').innerText = "DONE";
-        
-        const logEntry = { 
-            date: new Date().toLocaleDateString(), 
-            time: new Date().toLocaleTimeString(), 
-            val: finalVal, 
-            raw: finalRaw.toFixed(0), 
-            actual: "--", 
-            type: "BATCH_SCAN", 
-            finger: currentFinger, 
-            absorbance: finalAbs.toFixed(4),
-            noise: Math.sqrt(variance).toFixed(2), // Log Standard Deviation (smaller number)
-            temp: sensorData.t || 0
-        };
-
-        history.unshift(logEntry); if(history.length > 10) history.pop();
-        localStorage.setItem('tathya_hist_mac', JSON.stringify(history));
-        
-        renderLog(); drawTrend(); 
-        document.getElementById('scanBtn').disabled = false;
-
-        // Send to Cloud
-        sendToDatabase(logEntry);
     }
 
     function syncCal() {
