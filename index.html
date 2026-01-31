@@ -276,7 +276,7 @@
                 drawWave();
                 
                 // Simple finger detection for UI feedback
-                if(data.ir < 4000) updateStatus("PLACE FINGER", "#f44336"); // Lowered threshold
+                if(data.ir < 2000) updateStatus("PLACE FINGER", "#f44336"); // Lowered threshold for weak signals
                 else updateStatus("READY TO SCAN", "#00e676");
             }
         } catch(e) { /* Ignore parse errors */ }
@@ -378,7 +378,7 @@
         document.getElementById('scanBtn').disabled = true;
         buffer = []; pulseArr = []; irBuffer = [];
         let start = Date.now(); // Changed to let for pausing
-        const duration = 10000; 
+        const duration = 15000; // Increased scan time for stability
         let lastIR = 0; // Tracker for stability gate
         
         const timer = setInterval(() => {
@@ -400,7 +400,7 @@
             lastIR = irValue;
 
             // Hardware Validation
-            if(irValue < 4000) { // Lowered threshold (was 10000)
+            if(irValue < 2000) { // Lowered threshold to accept IR ~3000
                 updateStatus("NO FINGER", "#f44336"); 
                 // We don't return here, we just don't record valid data, or we pause?
                 // Better to keep running but warn.
@@ -470,7 +470,7 @@
         sendCommand("STOP"); // Tell ESP32 to stop sending data
         // Trim outliers
         buffer.sort((a,b) => a-b);
-        const trimCount = Math.floor(buffer.length * 0.1);
+        const trimCount = Math.floor(buffer.length * 0.2); // Increased trim to 20% for cleaner data
         const cleanBuffer = buffer.slice(trimCount, buffer.length - trimCount);
         const avg = cleanBuffer.reduce((a,b)=>a+b,0) / cleanBuffer.length;
         
