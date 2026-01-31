@@ -12,6 +12,10 @@
         #connectModal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.95); z-index: 100; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px; text-align: center; }
         .modal-input { width: 100%; max-width: 300px; padding: 15px; background: #111; border: 1px solid var(--blue); color: white; border-radius: 10px; margin: 15px 0; font-size: 16px; text-align: center; }
         
+        /* Identity Enrollment UI */
+        #enrollModal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: var(--bg); z-index: 90; display: none; flex-direction: column; align-items: center; justify-content: center; padding: 20px; text-align: center; }
+        #enrollModal.visible { display: flex; }
+
         /* Controls & Rings */
         .bio-ring-container { position: relative; width: 280px; height: 280px; margin: 10px 0; display: flex; align-items: center; justify-content: center; }
         .progress-ring { position: absolute; top: 0; left: 0; transform: rotate(-90deg); }
@@ -51,6 +55,24 @@
         <p style="color:#aaa; font-size:14px; max-width:300px;">1. Pair "Tathya_Gluco_Sensor" in your computer's Bluetooth settings.<br>2. Click Connect below and select the COM port.</p>
         <button onclick="connectSerial()" class="btn-main">CONNECT SENSOR</button>
         <div id="connectionStatus" style="margin-top:15px; color:#f44336; font-size:12px;"></div>
+    </div>
+
+    <!-- Enrollment Modal -->
+    <div id="enrollModal">
+        <h2 style="color:var(--accent); margin:0;">TATHYA IDENTITY</h2>
+        <div id="nameSection">
+            <p style="font-size:14px; color:#aaa;">Enter name for Global Cloud Learning</p>
+            <input type="text" id="userName" class="modal-input" placeholder="User Name">
+            <button onclick="startEnrollmentProcess()" class="btn-main">CONTINUE</button>
+        </div>
+        <div id="fingerSection" style="display:none;">
+            <div style="border: 2px solid var(--accent); width: 100px; height: 100px; display: flex; align-items: center; justify-content: center; border-radius: 50%; margin: 20px; background: #111;">
+                <div id="enrollCounter" style="font-size:40px; font-weight:900; color:var(--accent);"></div>
+            </div>
+            <div id="enrollFingerName" style="color:var(--blue); font-weight:bold; letter-spacing:1px; margin-bottom:5px;">LEFT INDEX</div>
+            <p style="color:#666; font-size:12px;">Place finger on sensor</p>
+            <button id="enrollBtn" onclick="startEnrollStep()" class="btn-main">START CALIBRATION</button>
+        </div>
     </div>
 
     <div class="status-badge" id="hwStatus">DISCONNECTED</div>
@@ -104,12 +126,13 @@
     <button onclick="hardReset()" style="margin-top:20px; background:transparent; border:1px solid #333; color:#555; padding:10px; border-radius:8px; font-size:10px;">RESET APP</button>
 
 <script>
-    const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz451OOsZfln8ljH5Guj25SU_FLMLX1Jihes3yu0NU5IoK94xB3NytW4ZAFyNDu2kxL/exec"; 
+    const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzpOeeA-knysis8HzxtHSKxNaBb8Dq9RR96myBBQRPmoJJ0hQCTu8x6z2K6KnllcQxsMQ/exec"; 
 
     const clock = document.getElementById('clockProgress'), pGraph = document.getElementById('pulseGraph'), pCtx = pGraph.getContext('2d');
     const tCanvas = document.getElementById('trendCanvas'), tCtx = tCanvas.getContext('2d');
     
-    let buffer = [], pulseArr = [], greenBuffer = [];
+    let buffer = [], pulseArr = [], irBuffer = [];
+    let sessionBuffer = []; // Stores scans for "Best of 5" logic
     let fingerProfiles = JSON.parse(localStorage.getItem('tathya_fingers_mac')) || {};
     let currentFinger = "Left Index";    
     
@@ -141,10 +164,11 @@
 
     let cal = sanitizeCal(fingerProfiles[currentFinger]) || JSON.parse(JSON.stringify(defaultCal));
     let history = JSON.parse(localStorage.getItem('tathya_hist_mac')) || [];
+    let enrollmentData = JSON.parse(localStorage.getItem('tathya_enroll_mac')) || null;
+    let enrollTempData = [];
 
     function init() {
         updateUI(); drawTrend(); renderLog();
-        // Auto-connect if previously successful? No, force manual for safety.
     }
 
     // --- DATABASE ENGINE ---
@@ -185,6 +209,13 @@
             document.getElementById('hwStatus').classList.add('connected');
             document.getElementById('scanBtn').disabled = false;
             updateStatus("SENSOR READY", "#00e676");
+
+            // Check Enrollment after connection
+            if(!enrollmentData) {
+                document.getElementById('enrollModal').classList.add('visible');
+            } else {
+                reviveFromCloud(enrollmentData.name, false);
+            }
 
             const textDecoder = new TextDecoderStream();
             const readableStreamClosed = port.readable.pipeTo(textDecoder.writable);
@@ -262,13 +293,86 @@
         updateUI();
     }
 
+    // --- ENROLLMENT LOGIC ---
+    async function startEnrollmentProcess() {
+        const name = document.getElementById('userName').value.trim();
+        if(!name) return alert("Please enter your name.");
+        
+        const isRevived = await reviveFromCloud(name, true);
+
+        if (isRevived) {
+            enrollmentData = { name: name, density: "Revived", baseline: cal.bInt };
+            localStorage.setItem('tathya_enroll_mac', JSON.stringify(enrollmentData));
+            document.getElementById('enrollModal').classList.remove('visible');
+        } else {
+            document.getElementById('nameSection').style.display = "none";
+            document.getElementById('fingerSection').style.display = "flex";
+            document.getElementById('fingerSection').style.flexDirection = "column";
+            document.getElementById('fingerSection').style.alignItems = "center";
+        }
+    }
+
+    async function reviveFromCloud(name, showAlert) {
+        try {
+            const resp = await fetch(GOOGLE_SCRIPT_URL, { 
+                method: 'POST', 
+                headers: { "Content-Type": "text/plain" },
+                redirect: "follow",
+                body: JSON.stringify({type: "REVIVE_REQUEST", name: name}) 
+            });
+            const cloudData = await resp.json();
+            if (cloudData && cloudData.syncCount > 0) {
+                cal.coefA = cloudData.coefA;
+                cal.coefB = cloudData.coefB;
+                cal.intercept = cloudData.intercept;
+                cal.personalOffset = cloudData.personalOffset;
+                cal.syncCount = cloudData.syncCount;
+                cal = sanitizeCal(cal);
+                saveCal();
+                updateUI();
+                if (showAlert) alert("Tathya Memory Revived: " + name + " (Level " + cal.syncCount + ")");
+                return true;
+            }
+            return false;
+        } catch(e) { console.log("Offline or New User"); return false; }
+    }
+
+    function startEnrollStep() {
+        if(!isConnected) return alert("Sensor not connected.");
+        sendCommand("START");
+        document.getElementById('enrollBtn').disabled = true;
+        let start = Date.now(), stepBuffer = [];
+        
+        const timer = setInterval(() => {
+            let elapsed = Date.now() - start;
+            document.getElementById('enrollCounter').innerText = Math.ceil((5000-elapsed)/1000);
+            
+            if(sensorData.r > 1000) stepBuffer.push(sensorData.r);
+
+            if(elapsed >= 5000) {
+                clearInterval(timer);
+                sendCommand("STOP");
+                if(stepBuffer.length < 10) {
+                    alert("Enrollment Failed. Please keep finger on sensor.");
+                    document.getElementById('enrollBtn').disabled = false;
+                    return;
+                }
+                const avg = stepBuffer.reduce((a,b)=>a+b,0)/stepBuffer.length;
+                enrollmentData = { name: document.getElementById('userName').value, density: "Hardware", baseline: avg.toFixed(0), type: "ENROLLMENT" };
+                localStorage.setItem('tathya_enroll_mac', JSON.stringify(enrollmentData));
+                sendToDatabase(enrollmentData);
+                document.getElementById('enrollModal').classList.remove('visible');
+            }
+        }, 100);
+    }
+
     function runAnalysis() {
         if(!isConnected) return alert("Hardware not connected.");
         
         sendCommand("START"); // Tell ESP32 to start sending data
         document.getElementById('scanBtn').disabled = true;
-        buffer = []; pulseArr = []; greenBuffer = [];
-        const start = Date.now(), duration = 30000; // 30 seconds for hardware is usually enough
+        buffer = []; pulseArr = []; irBuffer = [];
+        const start = Date.now(), duration = 10000; // 10s per scan for batch logic
         
         const timer = setInterval(() => {
             const elapsed = Date.now() - start;
@@ -288,7 +392,7 @@
                 updateStatus("ACQUIRING...", "#00e676");
                 if(elapsed > 2000) { // Skip first 2 seconds
                     buffer.push(intensity);
-                    greenBuffer.push(irValue);
+                    irBuffer.push(irValue);
                 }
             }
 
@@ -299,12 +403,15 @@
             
             if (elapsed >= duration) {
                 clearInterval(timer);
-                if (buffer.length < 100) {
+                
+                const variance = getVariance(buffer);
+                if (buffer.length < 50) {
                     sendCommand("STOP"); // Stop if failed
                     alert("Insufficient Data. Keep finger on sensor.");
                     document.getElementById('scanBtn').disabled = false;
+                    updateStatus("FAILED - NO DATA", "#f44336");
                 } else {
-                    finishAnalysis();
+                    finishAnalysis(variance);
                 }
             }
         }, 50); // 20Hz sampling for UI loop
@@ -333,12 +440,17 @@
         pCtx.stroke();
     }
 
+    function getVariance(arr) {
+        const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
+        return arr.reduce((a, b) => a + (b - mean) ** 2, 0) / arr.length;
+    }
+
     function updateStatus(msg, color) {
         const el = document.getElementById('sigStatus');
         el.innerText = msg; el.style.color = color;
     }
 
-    function finishAnalysis() {
+    function finishAnalysis(variance) {
         sendCommand("STOP"); // Tell ESP32 to stop sending data
         // Trim outliers
         buffer.sort((a,b) => a-b);
@@ -347,13 +459,9 @@
         const avg = cleanBuffer.reduce((a,b)=>a+b,0) / cleanBuffer.length;
         
         // --- Absorbance Model ---
-        let currentBaseline = (cal.bInt && cal.bInt > 50000) ? cal.bInt : 120000;
-        
-        // Auto-update baseline if signal is stronger (less absorption) than stored baseline
-        if (avg > currentBaseline) {
-            currentBaseline = avg + 500;
-            cal.bInt = currentBaseline; // Update stored baseline
-        }
+        // Use enrolled baseline if available, else fallback
+        let currentBaseline = (enrollmentData && enrollmentData.baseline) ? parseFloat(enrollmentData.baseline) : 120000;
+        if(cal.bInt && cal.bInt > 50000) currentBaseline = cal.bInt; // Prefer profile baseline if set
 
         const absorbance = Math.log(currentBaseline / avg);
 
@@ -362,23 +470,58 @@
                      cal.intercept + 
                      (cal.personalOffset || 0);
 
-        // Smoothing with history
-        if (history.length > 0) {
-            let lastVal = parseFloat(history[0].val);
-            if (lastVal > 40) {
-                let maxChange = 20; 
-                if (Math.abs(result - lastVal) > maxChange) {
-                    result = lastVal + (Math.sign(result - lastVal) * 10); 
-                }
-            }
-        }
-
         result = Math.max(40, Math.round(result)); // Clamp min value
 
-        document.getElementById('gluResult').innerText = result;
+        // --- BATCH LOGIC (Best of 5) ---
+        sessionBuffer.push({ val: result, raw: avg, abs: absorbance, var: variance });
+        const count = sessionBuffer.length;
+
+        if (count < 5) {
+            document.getElementById('gluResult').innerText = result;
+            document.getElementById('timer').innerText = `SCAN ${count}/5`;
+            
+            let msg = `WARMUP ${count}/5 - STABILIZING`;
+            if (count >= 3) msg = `OPTIMIZING ${count}/5`;
+            
+            updateStatus(msg, "#ffa000");
+            document.getElementById('scanBtn').disabled = false;
+            document.getElementById('scanBtn').innerText = `CONTINUE SCAN (${count+1}/5)`;
+            return; 
+        }
+
+        // Calculate Final Result (Average of top 3 most stable scans)
+        sessionBuffer.sort((a,b) => a.var - b.var);
+        const best3 = sessionBuffer.slice(0, 3);
+        
+        const finalAbs = best3.reduce((sum, item) => sum + item.abs, 0) / 3;
+        const finalRaw = best3.reduce((sum, item) => sum + item.raw, 0) / 3;
+
+        let finalVal = (cal.coefA * Math.pow(finalAbs, 2)) + 
+                       (cal.coefB * finalAbs) + 
+                       cal.intercept + 
+                       (cal.personalOffset || 0);
+        
+        finalVal = Math.round(finalVal);
+
+        // Reset
+        sessionBuffer = [];
+        document.getElementById('scanBtn').innerText = "START SENSOR SCAN";
+
+        document.getElementById('gluResult').innerText = finalVal;
         document.getElementById('timer').innerText = "DONE";
         
-        const logEntry = { date: new Date().toLocaleDateString(), time: new Date().toLocaleTimeString(), val: result, raw: avg.toFixed(0), actual: "--", type: "SCAN", finger: currentFinger, absorbance: absorbance.toFixed(4) };
+        const logEntry = { 
+            date: new Date().toLocaleDateString(), 
+            time: new Date().toLocaleTimeString(), 
+            val: finalVal, 
+            raw: finalRaw.toFixed(0), 
+            actual: "--", 
+            type: "BATCH_SCAN", 
+            finger: currentFinger, 
+            absorbance: finalAbs.toFixed(4),
+            noise: variance.toFixed(2)
+        };
+
         history.unshift(logEntry); if(history.length > 10) history.pop();
         localStorage.setItem('tathya_hist_mac', JSON.stringify(history));
         
@@ -446,6 +589,7 @@
         if(confirm("Reset all hardware profiles?")) {
             localStorage.removeItem('tathya_fingers_mac');
             localStorage.removeItem('tathya_hist_mac');
+            localStorage.removeItem('tathya_enroll_mac');
             location.reload();
         }
     }
