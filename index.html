@@ -272,7 +272,7 @@
             // Live Pulse Graph (Always running when connected)
             if(!document.getElementById('scanBtn').disabled) {
                 pulseArr.push(data.r); 
-                if(pulseArr.length > 50) pulseArr.shift();
+                if(pulseArr.length > 100) pulseArr.shift(); // Increased buffer for better BPM
                 drawWave();
                 
                 // Simple finger detection for UI feedback
@@ -413,7 +413,7 @@
             }
 
             pulseArr.push(intensity); 
-            if(pulseArr.length > 50) pulseArr.shift();
+            if(pulseArr.length > 100) pulseArr.shift(); // Increased buffer
             drawWave();
             updateBPM();
             
@@ -440,8 +440,8 @@
         for(let i=1; i<pulseArr.length-1; i++) {
             if(pulseArr[i] > pulseArr[i-1] && pulseArr[i] > pulseArr[i+1]) peaks++;
         }
-        // Approx BPM based on loop speed (50ms) -> 50 samples = 2.5 sec
-        let bpm = peaks * (60 / 2.5); 
+        // Approx BPM based on loop speed (50ms) -> 100 samples = 5.0 sec
+        let bpm = peaks * 12; // (60 / 5)
         if(bpm > 40 && bpm < 200) document.getElementById('bpmVal').innerText = Math.round(bpm) + " ♥";
     }
 
@@ -450,7 +450,7 @@
         pCtx.beginPath(); pCtx.strokeStyle = "#00e676"; pCtx.lineWidth = 2;
         const max = Math.max(...pulseArr), min = Math.min(...pulseArr), range = max - min || 1;
         pulseArr.forEach((p, i) => {
-            const x = (i / 50) * pGraph.width, y = pGraph.height - ((p - min) / range * pGraph.height);
+            const x = (i / 100) * pGraph.width, y = pGraph.height - ((p - min) / range * pGraph.height);
             if(i === 0) pCtx.moveTo(x,y); else pCtx.lineTo(x,y);
         });
         pCtx.stroke();
