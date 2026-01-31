@@ -148,15 +148,17 @@
         bInt: 120000, // Default baseline for MAX30102
         syncCount: 0, 
         finalAccuracyPercent: 0,
-        coefA: 0, coefB: 180, intercept: 40, // NEW LINEAR MODEL (More Sensitive)
+        coefA: 0, coefB: 850, intercept: -180, // HIGH SENSITIVITY MODEL (Jan 31)
         personalOffset: 0 
     };
 
     function sanitizeCal(c) {
         if (!c) return null;
         // Force update if using old "stuck" coefficients
-        if (c.coefA == null || isNaN(c.coefA) || Math.abs(c.coefA - 88.38) < 1) c.coefA = defaultCal.coefA;
-        if (c.coefB == null || isNaN(c.coefB) || Math.abs(c.coefB + 84.54) < 1) c.coefB = defaultCal.coefB;
+        if (c.coefB == null || isNaN(c.coefB) || c.coefB < 500) { 
+            c.coefA = defaultCal.coefA; c.coefB = defaultCal.coefB; c.intercept = defaultCal.intercept;
+            c.personalOffset = 0; // Reset offset for new model
+        }
         if (c.intercept == null || isNaN(c.intercept)) c.intercept = defaultCal.intercept;
         
         if (isNaN(c.personalOffset)) c.personalOffset = 0;
@@ -501,7 +503,8 @@
 
         // AUTO-CORRECT: Fix mismatch between default baseline (120k) and hardware signal (~4k)
         // We use a dynamic fallback (Raw + 2000) to ensure good dynamic range (Abs ~0.3 - 0.4)
-        if (currentBaseline > 50000 && avg < 10000) {
+        // Also fix if baseline was stuck at legacy 6000
+        if ((currentBaseline > 50000 && avg < 10000) || (currentBaseline === 6000)) {
              currentBaseline = avg + 2000; 
              cal.bInt = currentBaseline; // Save corrected baseline
              saveCal();
