@@ -148,15 +148,17 @@
         bInt: 120000, // Default baseline for MAX30102
         syncCount: 0, 
         finalAccuracyPercent: 0,
-        coefA: 88.38, coefB: -84.54, intercept: 154.21, // Updated to Jan 30th Model
+        coefA: 0, coefB: 180, intercept: 40, // NEW LINEAR MODEL (More Sensitive)
         personalOffset: 0 
     };
 
     function sanitizeCal(c) {
         if (!c) return null;
-        if (c.coefA == null || isNaN(c.coefA)) c.coefA = defaultCal.coefA;
-        if (c.coefB == null || isNaN(c.coefB)) c.coefB = defaultCal.coefB;
+        // Force update if using old "stuck" coefficients
+        if (c.coefA == null || isNaN(c.coefA) || Math.abs(c.coefA - 88.38) < 1) c.coefA = defaultCal.coefA;
+        if (c.coefB == null || isNaN(c.coefB) || Math.abs(c.coefB + 84.54) < 1) c.coefB = defaultCal.coefB;
         if (c.intercept == null || isNaN(c.intercept)) c.intercept = defaultCal.intercept;
+        
         if (isNaN(c.personalOffset)) c.personalOffset = 0;
         if (isNaN(c.bInt) || c.bInt <= 0) c.bInt = 120000;
         return c;
@@ -269,16 +271,16 @@
             sensorData = data;
             document.getElementById('rawVal').innerText = `R: ${data.r} | IR: ${data.ir}`;
 
-            // Live Pulse Graph (Always running when connected)
-            if(!document.getElementById('scanBtn').disabled) {
-                pulseArr.push(data.r); 
-                if(pulseArr.length > 100) pulseArr.shift(); // Increased buffer for better BPM
-                drawWave();
-                
-                // Simple finger detection for UI feedback
-                if(data.ir < 2000) updateStatus("PLACE FINGER", "#f44336"); // Lowered threshold for weak signals
-                else updateStatus("READY TO SCAN", "#00e676");
-            }
+            // Always update Pulse Graph & BPM (Live View)
+            pulseArr.push(data.r); 
+            if(pulseArr.length > 300) pulseArr.shift(); // Increased buffer (approx 6s @ 50Hz)
+            drawWave();
+            updateBPM();
+            
+            // Simple finger detection for UI feedback
+            if(data.ir < 2000) updateStatus("PLACE FINGER", "#f44336"); 
+            else if(!document.getElementById('scanBtn').disabled) updateStatus("READY TO SCAN", "#00e676");
+            
         } catch(e) { /* Ignore parse errors */ }
     }
 
@@ -412,10 +414,6 @@
                 }
             }
 
-            pulseArr.push(intensity); 
-            if(pulseArr.length > 100) pulseArr.shift(); // Increased buffer
-            drawWave();
-            updateBPM();
             
             if (elapsed >= duration) {
                 clearInterval(timer);
@@ -434,14 +432,36 @@
     }
 
     function updateBPM() {
-        if(pulseArr.length < 40) return;
-        // Simple peak counting
-        let peaks = 0;
-        for(let i=1; i<pulseArr.length-1; i++) {
-            if(pulseArr[i] > pulseArr[i-1] && pulseArr[i] > pulseArr[i+1]) peaks++;
+        if(pulseArr.length < 50) return;
+        
+        // 1. Smooth data (Simple Moving Average) to remove high-freq noise
+        let smooth = [];
+        const window = 5;
+        for(let i=0; i<pulseArr.length-window; i++) {
+            let sum = 0;
+            for(let j=0; j<window; j++) sum += pulseArr[i+j];
+            smooth.push(sum/window);
         }
-        // Approx BPM based on loop speed (50ms) -> 100 samples = 5.0 sec
-        let bpm = peaks * 12; // (60 / 5)
+
+        // 2. Peak Detection with Debounce
+        const mean = smooth.reduce((a,b)=>a+b,0)/smooth.length;
+        let peaks = 0;
+        let lastPeakIdx = -20;
+
+        for(let i=1; i<smooth.length-1; i++) {
+            if(smooth[i] > mean && smooth[i] > smooth[i-1] && smooth[i] > smooth[i+1]) {
+                if(i - lastPeakIdx > 15) { // Debounce (~300ms at 50Hz)
+                    peaks++;
+                    lastPeakIdx = i;
+                }
+            }
+        }
+
+        // 3. Calculate BPM (Assuming ~50Hz data rate from ESP32)
+        // Duration in seconds = samples * 0.02
+        const durationSec = smooth.length * 0.02;
+        let bpm = (peaks / durationSec) * 60;
+
         if(bpm > 40 && bpm < 200) document.getElementById('bpmVal').innerText = Math.round(bpm) + " ♥";
     }
 
@@ -450,7 +470,7 @@
         pCtx.beginPath(); pCtx.strokeStyle = "#00e676"; pCtx.lineWidth = 2;
         const max = Math.max(...pulseArr), min = Math.min(...pulseArr), range = max - min || 1;
         pulseArr.forEach((p, i) => {
-            const x = (i / 100) * pGraph.width, y = pGraph.height - ((p - min) / range * pGraph.height);
+            const x = (i / 300) * pGraph.width, y = pGraph.height - ((p - min) / range * pGraph.height);
             if(i === 0) pCtx.moveTo(x,y); else pCtx.lineTo(x,y);
         });
         pCtx.stroke();
@@ -480,9 +500,9 @@
         if(cal.bInt && cal.bInt > 0) currentBaseline = cal.bInt; // Prefer profile baseline if set
 
         // AUTO-CORRECT: Fix mismatch between default baseline (120k) and hardware signal (~4k)
-        // We use a fixed fallback (6000) instead of a multiplier to preserve signal variation.
+        // We use a dynamic fallback (Raw + 2000) to ensure good dynamic range (Abs ~0.3 - 0.4)
         if (currentBaseline > 50000 && avg < 10000) {
-             currentBaseline = 6000; 
+             currentBaseline = avg + 2000; 
              cal.bInt = currentBaseline; // Save corrected baseline
              saveCal();
         }
@@ -543,7 +563,8 @@
             type: "BATCH_SCAN", 
             finger: currentFinger, 
             absorbance: finalAbs.toFixed(4),
-            noise: Math.sqrt(variance).toFixed(2) // Log Standard Deviation (smaller number)
+            noise: Math.sqrt(variance).toFixed(2), // Log Standard Deviation (smaller number)
+            temp: sensorData.t || 0
         };
 
         history.unshift(logEntry); if(history.length > 10) history.pop();
@@ -594,7 +615,8 @@
             finger: currentFinger,
             date: new Date().toLocaleDateString(),
             time: new Date().toLocaleTimeString(),
-            absorbance: abs.toFixed(4)
+            absorbance: abs.toFixed(4),
+            temp: lastScan.temp
         });
     }
 
