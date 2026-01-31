@@ -510,12 +510,21 @@
         // We use a dynamic fallback (Raw + 2000) to ensure good dynamic range (Abs ~0.3 - 0.4)
         // Also fix if baseline was stuck at legacy 6000
         if ((currentBaseline > 50000 && avg < 10000) || (currentBaseline === 6000)) {
-             currentBaseline = avg + 2000; 
+             currentBaseline = avg * 1.4; // Use Ratio (1.4x) instead of fixed offset for consistent Abs ~0.33
              cal.bInt = currentBaseline; // Save corrected baseline
              saveCal();
         }
 
-        const absorbance = Math.log(currentBaseline / avg);
+        let absorbance = Math.log(currentBaseline / avg);
+
+        // NEW: Sanity Check for High Absorbance (Finger Pressure Shift)
+        // If Abs > 0.5, the baseline is too far from raw. Reset to 1.4x ratio.
+        if (absorbance > 0.5) {
+            currentBaseline = avg * 1.4;
+            cal.bInt = currentBaseline;
+            saveCal();
+            absorbance = Math.log(currentBaseline / avg); // Recalculate
+        }
 
         let result = (cal.coefA * Math.pow(absorbance, 2)) + 
                      (cal.coefB * absorbance) + 
