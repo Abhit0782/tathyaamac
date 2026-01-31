@@ -116,6 +116,8 @@
     // WebSocket & Sensor Variables
     let sensorData = { r: 0, ir: 0 };
     let isConnected = false;
+    let port = null;
+    let writer = null;
 
     // Hardware-Specific Calibration Defaults
     // MAX30102 outputs ~100,000 to 200,000. Camera was 0-255.
@@ -164,12 +166,19 @@
 
     async function connectSerial() {
         if (!navigator.serial) return alert("Web Serial API not supported. Please use Chrome, Edge, or Opera.");
+        if (port && port.readable) return alert("Already connected!"); // Prevent double open
+        
         const statusDiv = document.getElementById('connectionStatus');
         
         try {
-            const port = await navigator.serial.requestPort();
+            port = await navigator.serial.requestPort();
             await port.open({ baudRate: 115200 });
             
+            // Setup Writer (to send START/STOP commands)
+            const textEncoder = new TextEncoderStream();
+            const writableStreamClosed = textEncoder.readable.pipeTo(port.writable);
+            writer = textEncoder.writable.getWriter();
+
             isConnected = true;
             document.getElementById('connectModal').style.display = 'none';
             document.getElementById('hwStatus').innerText = "HARDWARE CONNECTED";
@@ -198,7 +207,19 @@
         } catch(e) {
             console.error(e);
             statusDiv.innerText = "Connection Failed: " + e.message;
+        } finally {
+            // Cleanup on loop exit (disconnect)
+            if (writer) { writer.releaseLock(); writer = null; }
+            if (port) { await port.close(); port = null; }
             onDisconnect();
+        }
+    }
+
+    async function sendCommand(cmd) {
+        if (writer) {
+            try {
+                await writer.write(cmd + "\n");
+            } catch (e) { console.error("Send Error:", e); }
         }
     }
 
@@ -208,6 +229,7 @@
         document.getElementById('hwStatus').classList.remove('connected');
         document.getElementById('scanBtn').disabled = true;
         document.getElementById('connectModal').style.display = 'flex';
+        port = null; // Ensure port is cleared
     }
 
     function processData(jsonStr) {
@@ -243,6 +265,7 @@
     function runAnalysis() {
         if(!isConnected) return alert("Hardware not connected.");
         
+        sendCommand("START"); // Tell ESP32 to start sending data
         document.getElementById('scanBtn').disabled = true;
         buffer = []; pulseArr = []; greenBuffer = [];
         const start = Date.now(), duration = 30000; // 30 seconds for hardware is usually enough
@@ -277,6 +300,7 @@
             if (elapsed >= duration) {
                 clearInterval(timer);
                 if (buffer.length < 100) {
+                    sendCommand("STOP"); // Stop if failed
                     alert("Insufficient Data. Keep finger on sensor.");
                     document.getElementById('scanBtn').disabled = false;
                 } else {
@@ -315,6 +339,7 @@
     }
 
     function finishAnalysis() {
+        sendCommand("STOP"); // Tell ESP32 to stop sending data
         // Trim outliers
         buffer.sort((a,b) => a-b);
         const trimCount = Math.floor(buffer.length * 0.1);
@@ -444,4 +469,3 @@
 </script>
 </body>
 </html>
-
