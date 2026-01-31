@@ -276,7 +276,7 @@
                 drawWave();
                 
                 // Simple finger detection for UI feedback
-                if(data.ir < 10000) updateStatus("PLACE FINGER", "#f44336");
+                if(data.ir < 4000) updateStatus("PLACE FINGER", "#f44336"); // Lowered threshold
                 else updateStatus("READY TO SCAN", "#00e676");
             }
         } catch(e) { /* Ignore parse errors */ }
@@ -391,7 +391,7 @@
             let irValue = sensorData.ir;  // IR for Pressure/Contact
 
             // Review Advice: "Stability Gate" - Pause if motion detected
-            if (lastIR > 0 && Math.abs(irValue - lastIR) > 800) {
+            if (lastIR > 0 && Math.abs(irValue - lastIR) > 2000) { // Relaxed tolerance (was 800)
                 start += 50; // Extend timer (pause effect)
                 updateStatus("HOLD STEADY", "#ffa000");
                 lastIR = irValue;
@@ -400,7 +400,7 @@
             lastIR = irValue;
 
             // Hardware Validation
-            if(irValue < 10000) { 
+            if(irValue < 4000) { // Lowered threshold (was 10000)
                 updateStatus("NO FINGER", "#f44336"); 
                 // We don't return here, we just don't record valid data, or we pause?
                 // Better to keep running but warn.
@@ -423,7 +423,7 @@
                 const variance = getVariance(buffer);
                 if (buffer.length < 50) {
                     sendCommand("STOP"); // Stop if failed
-                    alert("Insufficient Data. Keep finger on sensor.");
+                    alert("Insufficient Data (IR: " + sensorData.ir + "). Keep finger on sensor.");
                     document.getElementById('scanBtn').disabled = false;
                     updateStatus("FAILED - NO DATA", "#f44336");
                 } else {
