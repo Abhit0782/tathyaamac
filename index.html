@@ -384,6 +384,7 @@
         let start = Date.now(); // Changed to let for pausing
         const duration = 15000; // Increased scan time for stability
         let lastIR = 0; // Tracker for stability gate
+        let smoothVal = 0; // NEW: Smoothing variable for noise reduction
         
         const timer = setInterval(() => {
             const elapsed = Date.now() - start;
@@ -411,7 +412,11 @@
             } else {
                 updateStatus("ACQUIRING...", "#00e676");
                 if(elapsed > 2000) { // Skip first 2 seconds
-                    buffer.push(intensity);
+                    // NEW: Apply Exponential Smoothing (Low Pass Filter)
+                    // Reduces random jitter (Noise) while preserving the Glucose Baseline (DC)
+                    // Alpha 0.4 = 40% New Data, 60% History (Smooths out spikes)
+                    smoothVal = (smoothVal === 0) ? intensity : (smoothVal * 0.6) + (intensity * 0.4);
+                    buffer.push(smoothVal);
                     irBuffer.push(irValue);
                 }
             }
