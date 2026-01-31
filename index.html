@@ -148,7 +148,7 @@
         bInt: 120000, // Default baseline for MAX30102
         syncCount: 0, 
         finalAccuracyPercent: 0,
-        coefA: -450.24, coefB: -85.06, intercept: 157.66, 
+        coefA: 88.38, coefB: -84.54, intercept: 154.21, // Updated to Jan 30th Model
         personalOffset: 0 
     };
 
@@ -478,6 +478,13 @@
         // Use enrolled baseline if available, else fallback
         let currentBaseline = (enrollmentData && enrollmentData.baseline) ? parseFloat(enrollmentData.baseline) : 120000;
         if(cal.bInt && cal.bInt > 50000) currentBaseline = cal.bInt; // Prefer profile baseline if set
+
+        // AUTO-CORRECT: If signal is significantly weaker than baseline (Absorbance > 1.0)
+        // This implies a hardware mismatch (e.g. Raw=4000 vs Base=120000).
+        // We adjust baseline dynamically to ensure absorbance falls in physiological range (0.1 - 0.5).
+        if (Math.log(currentBaseline / avg) > 1.0) {
+             currentBaseline = avg * 1.25; // Force ~0.22 absorbance
+        }
 
         const absorbance = Math.log(currentBaseline / avg);
 
