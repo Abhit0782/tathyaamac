@@ -357,7 +357,12 @@
                     document.getElementById('enrollBtn').disabled = false;
                     return;
                 }
-                const avg = stepBuffer.reduce((a,b)=>a+b,0)/stepBuffer.length;
+                // Review Advice: "Auto-calibrate baseline... finding maximum possible light transmission"
+                // Sort descending to find brightest values (max transmission/clearest signal)
+                stepBuffer.sort((a,b) => b-a);
+                const top20 = stepBuffer.slice(0, Math.ceil(stepBuffer.length * 0.2));
+                const avg = top20.reduce((a,b)=>a+b,0)/top20.length;
+                
                 enrollmentData = { name: document.getElementById('userName').value, density: "Hardware", baseline: avg.toFixed(0), type: "ENROLLMENT" };
                 localStorage.setItem('tathya_enroll_mac', JSON.stringify(enrollmentData));
                 sendToDatabase(enrollmentData);
@@ -372,7 +377,9 @@
         sendCommand("START"); // Tell ESP32 to start sending data
         document.getElementById('scanBtn').disabled = true;
         buffer = []; pulseArr = []; irBuffer = [];
-        const start = Date.now(), duration = 10000; // 10s per scan for batch logic
+        let start = Date.now(); // Changed to let for pausing
+        const duration = 10000; 
+        let lastIR = 0; // Tracker for stability gate
         
         const timer = setInterval(() => {
             const elapsed = Date.now() - start;
@@ -382,6 +389,15 @@
             // Get latest data from WebSocket buffer
             let intensity = sensorData.r; // Red for Glucose
             let irValue = sensorData.ir;  // IR for Pressure/Contact
+
+            // Review Advice: "Stability Gate" - Pause if motion detected
+            if (lastIR > 0 && Math.abs(irValue - lastIR) > 800) {
+                start += 50; // Extend timer (pause effect)
+                updateStatus("HOLD STEADY", "#ffa000");
+                lastIR = irValue;
+                return; // Skip this frame
+            }
+            lastIR = irValue;
 
             // Hardware Validation
             if(irValue < 10000) { 
@@ -613,4 +629,3 @@
 </script>
 </body>
 </html>
-
