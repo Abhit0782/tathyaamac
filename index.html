@@ -477,13 +477,14 @@
         // --- Absorbance Model ---
         // Use enrolled baseline if available, else fallback
         let currentBaseline = (enrollmentData && enrollmentData.baseline) ? parseFloat(enrollmentData.baseline) : 120000;
-        if(cal.bInt && cal.bInt > 50000) currentBaseline = cal.bInt; // Prefer profile baseline if set
+        if(cal.bInt && cal.bInt > 0) currentBaseline = cal.bInt; // Prefer profile baseline if set
 
-        // AUTO-CORRECT: If signal is significantly weaker than baseline (Absorbance > 1.0)
-        // This implies a hardware mismatch (e.g. Raw=4000 vs Base=120000).
-        // We adjust baseline dynamically to ensure absorbance falls in physiological range (0.1 - 0.5).
-        if (Math.log(currentBaseline / avg) > 1.0) {
-             currentBaseline = avg * 1.25; // Force ~0.22 absorbance
+        // AUTO-CORRECT: Fix mismatch between default baseline (120k) and hardware signal (~4k)
+        // We use a fixed fallback (6000) instead of a multiplier to preserve signal variation.
+        if (currentBaseline > 50000 && avg < 10000) {
+             currentBaseline = 6000; 
+             cal.bInt = currentBaseline; // Save corrected baseline
+             saveCal();
         }
 
         const absorbance = Math.log(currentBaseline / avg);
@@ -542,7 +543,7 @@
             type: "BATCH_SCAN", 
             finger: currentFinger, 
             absorbance: finalAbs.toFixed(4),
-            noise: variance.toFixed(2)
+            noise: Math.sqrt(variance).toFixed(2) // Log Standard Deviation (smaller number)
         };
 
         history.unshift(logEntry); if(history.length > 10) history.pop();
