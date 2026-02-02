@@ -45,6 +45,32 @@
 
         .status-badge { padding: 5px 10px; border-radius: 15px; background: #222; color: #888; font-size: 10px; font-weight: bold; margin-bottom: 10px; border: 1px solid #333; }
         .status-badge.connected { background: rgba(0, 230, 118, 0.1); color: #00e676; border-color: #00e676; }
+
+        /* Dashboard Layout */
+        .dashboard-container { 
+            display: flex; 
+            flex-direction: column; /* Force vertical stacking for visibility */
+            gap: 10px; 
+            width: 100%; 
+            max-width: 500px; /* Constrain width for better mobile/desktop view */
+            margin: 0 auto; 
+        }
+        .visual-panel, .analysis-panel { 
+            width: 100%; 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+        }
+        .card, .trend-card, .btn-main, .cal-bar-container { max-width: 100%; width: 100%; }
+        
+        /* Vascular Telemetry Card */
+        .vascular-card { width: 100%; background: var(--card); border-radius: 20px; padding: 15px; margin-top: 15px; border: 1px solid #222; box-sizing: border-box; font-family: monospace; font-size: 12px; display: block !important; visibility: visible !important; }
+        .vascular-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+        .vascular-item { background: #111; padding: 8px; border-radius: 8px; border: 1px solid #333; }
+        .vascular-label { color: #888; font-size: 10px; display: block; margin-bottom: 2px; }
+        .vascular-value { font-size: 14px; font-weight: bold; }
+        
+        #sdppgGraph { width: 100%; height: 60px; background: #000; border-radius: 8px; border: 1px solid #333; margin-top: 5px; }
     </style>
 </head>
 <body>
@@ -79,51 +105,81 @@
 
     <h2 style="margin:0; font-weight: 400; color: var(--accent);">TATHYA <span style="font-weight: 800;">MAC</span></h2>
     
-    <div style="margin: 10px 0;">
-        <select id="fingerSelector" onchange="changeFinger()" style="background: #111; color: #fff; padding: 8px; border-radius: 8px; border: 1px solid #333; width: 200px; text-align: center; font-weight: bold;">
-            <option value="Left Index" selected>Left Index</option>
-            <option value="Right Index">Right Index</option>
-            <option value="Other">Other Finger</option>
-        </select>
-    </div>
+    <div class="dashboard-container">
+        <!-- LEFT PANEL: VISUALS (Result, Progress, Wave) -->
+        <div class="visual-panel">
+            <div style="margin: 10px 0;">
+                <select id="fingerSelector" onchange="changeFinger()" style="background: #111; color: #fff; padding: 8px; border-radius: 8px; border: 1px solid #333; width: 200px; text-align: center; font-weight: bold;">
+                    <option value="Left Index" selected>Left Index</option>
+                    <option value="Right Index">Right Index</option>
+                    <option value="Other">Other Finger</option>
+                </select>
+            </div>
 
-    <div class="bio-ring-container">
-        <svg class="progress-ring" width="280" height="280">
-            <circle class="progress-ring__track" stroke-width="8" fill="transparent" r="130" cx="140" cy="140"/>
-            <circle id="clockProgress" class="progress-ring__circle" stroke-width="8" fill="transparent" r="130" cx="140" cy="140"/>
-        </svg>
-        <div class="inner-display">
-            <!-- No Video Element Here - Pure Data -->
-            <div id="timer" class="timer-text">--</div>
-            <div id="gluResult" class="result-text">--</div>
-            <div class="unit-text">mg/dL</div>
-            <div id="sigStatus" style="font-size:10px; color:#888; position:absolute; top:60px; font-weight:bold; letter-spacing:1px;">WAITING FOR DATA</div>
-            <div id="bpmVal" style="font-size:14px; color:#f44336; position:absolute; top:80px; font-weight:bold;">-- BPM</div>
-            <div id="rawVal" style="font-size:9px; color:#444; position:absolute; top:100px; font-family:monospace;">R: -- | IR: --</div>
-            <canvas id="pulseGraph"></canvas>
+            <div class="bio-ring-container">
+                <svg class="progress-ring" width="280" height="280">
+                    <circle class="progress-ring__track" stroke-width="8" fill="transparent" r="130" cx="140" cy="140"/>
+                    <circle id="clockProgress" class="progress-ring__circle" stroke-width="8" fill="transparent" r="130" cx="140" cy="140"/>
+                </svg>
+                <div class="inner-display">
+                    <!-- No Video Element Here - Pure Data -->
+                    <div id="timer" class="timer-text">--</div>
+                    <div id="gluResult" class="result-text">--</div>
+                    <div class="unit-text">mg/dL</div>
+                    <div id="sigStatus" style="font-size:10px; color:#888; position:absolute; top:60px; font-weight:bold; letter-spacing:1px;">WAITING FOR DATA</div>
+                    <div id="bpmVal" style="font-size:14px; color:#f44336; position:absolute; top:80px; font-weight:bold;">-- BPM</div>
+                    <div id="rawVal" style="font-size:9px; color:#444; position:absolute; top:100px; font-family:monospace;">R: -- | IR: --</div>
+                    <canvas id="pulseGraph"></canvas>
+                </div>
+            </div>
+
+            <button class="btn-main" id="scanBtn" onclick="runAnalysis()" disabled>START SENSOR SCAN</button>
+            
+            <div class="cal-bar-container"><div id="calBar"></div></div>
+            <div style="font-size:10px; color:#666; margin-top:5px; display:flex; justify-content:space-between; width:100%; max-width:400px; align-items:center;">
+                <span id="calText">ACCURACY</span>
+                <span id="statusMsg" style="font-weight:bold;"></span>
+            </div>
+        </div>
+
+        <!-- RIGHT PANEL: ANALYSIS (Findings, Telemetry, Trends) -->
+        <div class="analysis-panel">
+            <div class="trend-card" style="margin-top: 10px; border-color: #333;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-size: 11px; color: #888;">SIGNAL CONFIDENCE</span>
+                    <span id="confPercent" style="font-size: 11px; font-weight: bold; color: var(--accent);">0%</span>
+                </div>
+                <div style="height: 4px; background: #222; margin-top: 5px; border-radius: 2px;">
+                    <div id="confBar" style="height: 100%; width: 0%; background: var(--accent); transition: width 0.3s;"></div>
+                </div>
+            </div>
+
+            <!-- Vascular Telemetry (Moved from Debug Overlay) -->
+            <div id="debugOverlay" class="vascular-card">
+                <div style="color:var(--blue); font-weight:bold; margin-bottom:10px; font-size:12px;">VASCULAR TELEMETRY</div>
+                <div class="vascular-grid">
+                    <div class="vascular-item"><span class="vascular-label">A-WAVE</span><span id="dbgA" class="vascular-value" style="color:var(--accent);">--</span></div>
+                    <div class="vascular-item"><span class="vascular-label">B-WAVE</span><span id="dbgB" class="vascular-value" style="color:#ff5252;">--</span></div>
+                    <div class="vascular-item"><span class="vascular-label">STIFFNESS RATIO</span><span id="dbgRatio" class="vascular-value">--</span></div>
+                    <div class="vascular-item"><span class="vascular-label">ABSORBANCE</span><span id="dbgAbs" class="vascular-value">--</span></div>
+                </div>
+                <canvas id="sdppgGraph" width="300" height="60"></canvas>
+            </div>
+
+            <div class="trend-card">
+                <span style="font-size: 11px; color: var(--blue); font-weight: bold;">GLUCOSE TREND</span>
+                <canvas id="trendCanvas"></canvas>
+            </div>
+
+            <div class="card" id="syncCard">
+                <button onclick="syncCal()" style="background:var(--blue); border:none; color:white; padding:12px; border-radius:12px; font-weight:bold; width:100%;">SYNC WITH METER</button>
+                <input type="number" id="meterVal" placeholder="Actual Reading" style="width:100%; background:#000; border:1px solid #333; color:white; padding:12px; border-radius:8px; margin-top:10px; box-sizing:border-box;">
+            </div>
+
+            <div id="historyLog" class="card"></div>
+            <button onclick="hardReset()" style="margin-top:20px; background:transparent; border:1px solid #333; color:#555; padding:10px; border-radius:8px; font-size:10px;">RESET APP</button>
         </div>
     </div>
-
-    <button class="btn-main" id="scanBtn" onclick="runAnalysis()" disabled>START SENSOR SCAN</button>
-    
-    <div class="cal-bar-container"><div id="calBar"></div></div>
-    <div style="font-size:10px; color:#666; margin-top:5px; display:flex; justify-content:space-between; width:100%; max-width:400px; align-items:center;">
-        <span id="calText">ACCURACY</span>
-        <span id="statusMsg" style="font-weight:bold;"></span>
-    </div>
-
-    <div class="trend-card">
-        <span style="font-size: 11px; color: var(--blue); font-weight: bold;">GLUCOSE TREND</span>
-        <canvas id="trendCanvas"></canvas>
-    </div>
-
-    <div class="card" id="syncCard">
-        <button onclick="syncCal()" style="background:var(--blue); border:none; color:white; padding:12px; border-radius:12px; font-weight:bold; width:100%;">SYNC WITH METER</button>
-        <input type="number" id="meterVal" placeholder="Actual Reading" style="width:100%; background:#000; border:1px solid #333; color:white; padding:12px; border-radius:8px; margin-top:10px; box-sizing:border-box;">
-    </div>
-
-    <div id="historyLog" class="card"></div>
-    <button onclick="hardReset()" style="margin-top:20px; background:transparent; border:1px solid #333; color:#555; padding:10px; border-radius:8px; font-size:10px;">RESET APP</button>
 
 <script>
     const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz451OOsZfln8ljH5Guj25SU_FLMLX1Jihes3yu0NU5IoK94xB3NytW4ZAFyNDu2kxL/exec"; 
@@ -149,7 +205,8 @@
         syncCount: 0, 
         finalAccuracyPercent: 0,
         coefA: 0, coefB: 850, intercept: -180, // HIGH SENSITIVITY MODEL (Jan 31)
-        personalOffset: 0 
+        personalOffset: 0,
+        tempCoef: -0.12 // Thermal Compensation
     };
 
     function sanitizeCal(c) {
@@ -163,21 +220,24 @@
         
         if (isNaN(c.personalOffset)) c.personalOffset = 0;
         if (isNaN(c.bInt) || c.bInt <= 0) c.bInt = 120000;
+        if (c.tempCoef == null || isNaN(c.tempCoef)) c.tempCoef = defaultCal.tempCoef;
         return c;
     }
 
     let cal = sanitizeCal(fingerProfiles[currentFinger]) || JSON.parse(JSON.stringify(defaultCal));
     let history = JSON.parse(localStorage.getItem('tathya_hist_mac')) || [];
     let enrollmentData = JSON.parse(localStorage.getItem('tathya_enroll_mac')) || null;
-    let enrollTempData = [];
+    // enrollTempData removed as it is unused in MAC version
 
     // --- HIDDEN RECURSIVE LOOP GLOBALS ---
     let scanTimer = null;
+    let confidenceTimer = null;
     let minScanDuration = 30000;
     let isExtended = false;
     let scanStart = 0;
     let avgRed = 0;
     let errorCount = 0;
+    let bpmHistory = [];
 
     function init() {
         updateUI(); drawTrend(); renderLog();
@@ -304,10 +364,9 @@
             else if(!document.getElementById('scanBtn').disabled) updateStatus("READY TO SCAN", "#00e676");
             
         } catch(e) { 
-            if (e instanceof SyntaxError) {
-                errorCount++;
-                console.warn("JSON Parse Error:", e.message);
-            }
+            // Catch all parsing errors to prevent crash
+            errorCount++;
+            console.warn("Data Processing Error:", e.message);
         }
     }
 
@@ -334,6 +393,14 @@
             localStorage.setItem('tathya_enroll_mac', JSON.stringify(enrollmentData));
             document.getElementById('enrollModal').classList.remove('visible');
         } else {
+            // Pre-Scan Calibration: Ambient Light Check
+            if (isConnected) {
+                sendCommand("START");
+                await new Promise(r => setTimeout(r, 500));
+                if (sensorData.ir > 500) { sendCommand("STOP"); alert("Too much ambient light. Please keep the sensor clear."); return; }
+                sendCommand("STOP");
+            }
+
             document.getElementById('nameSection').style.display = "none";
             document.getElementById('fingerSection').style.display = "flex";
             document.getElementById('fingerSection').style.flexDirection = "column";
@@ -366,16 +433,37 @@
         } catch(e) { console.log("Offline or New User"); return false; }
     }
 
-    function startEnrollStep() {
+    async function startEnrollStep() {
         if(!isConnected) return alert("Sensor not connected.");
         sendCommand("START");
+        
+        // Ambient Guard
+        await new Promise(r => setTimeout(r, 500));
+        if (sensorData.ir > 500 && sensorData.ir < 2000) { 
+            sendCommand("STOP"); alert("Please shade the sensor from bright light."); return; 
+        }
+
         document.getElementById('enrollBtn').disabled = true;
         let start = Date.now(), stepBuffer = [];
+        let badRatioCount = 0;
         
         const timer = setInterval(() => {
             let elapsed = Date.now() - start;
             document.getElementById('enrollCounter').innerText = Math.ceil((5000-elapsed)/1000);
             
+            // Material Detection Check (Ratio r/ir)
+            if (sensorData.ir > 1000) {
+                let ratio = sensorData.r / sensorData.ir;
+                if (ratio < 0.4 || ratio > 1.5) badRatioCount++;
+            }
+            if (badRatioCount > 15) { // Consistently bad for ~1.5s
+                clearInterval(timer);
+                sendCommand("STOP");
+                alert("Non-human material detected.");
+                document.getElementById('enrollBtn').disabled = false;
+                return;
+            }
+
             if(sensorData.r > 1000) stepBuffer.push(sensorData.r);
 
             if(elapsed >= 5000) {
@@ -406,9 +494,10 @@
         
         sendCommand("START"); // Tell ESP32 to start sending data
         document.getElementById('scanBtn').disabled = true;
+        // document.getElementById('debugOverlay').style.display = 'block'; // No longer needed as it's a permanent card
         
         // Reset Buffers & State
-        buffer = []; irBuffer = []; sessionBuffer = []; // Explicitly clear all session buffers
+        buffer = []; irBuffer = []; sessionBuffer = []; bpmHistory = []; // Explicitly clear all session buffers
         pulseArr = [];
         scanStart = Date.now();
         minScanDuration = 30000;
@@ -420,6 +509,9 @@
         if(cal.bInt && cal.bInt > 0) storedBase = cal.bInt;
 
         updateStatus("ANALYZING BIO-SIGNALS...", "#2196f3");
+
+        if (confidenceTimer) clearInterval(confidenceTimer);
+        confidenceTimer = setInterval(updateConfidence, 1000);
 
         scanTimer = setInterval(() => {
             recursiveLoop(storedBase);
@@ -433,6 +525,17 @@
         // 1. Data Acquisition
         let red = sensorData.r;
         let ir = sensorData.ir;
+
+        // Auto-Discard Sentinel
+        if (elapsed > 10000 && parseInt(document.getElementById('confPercent').innerText) < 45) {
+            clearInterval(scanTimer);
+            sendCommand("STOP");
+            updateStatus("SIGNAL TOO NOISY - RESTARTING", "#f44336");
+            setTimeout(() => {
+                runAnalysis(); 
+            }, 2000);
+            return;
+        }
         
         // UI Graph Update
         pulseArr.push({ val: red, time: Date.now() });
@@ -443,6 +546,8 @@
         // Validation
         if (ir < 2000) {
             updateStatus("NO FINGER", "#f44336");
+            avgRed = 0; // Reset DC baseline on finger lift
+            buffer = [];
         } else {
             updateStatus("ANALYZING BIO-SIGNALS...", "#2196f3");
         }
@@ -453,7 +558,7 @@
         // RPI = Pressure Index (Deviation from Baseline)
         let rpi = (avgRed - baseline) / baseline;
         
-        buffer.push({t: elapsed, r: red, ir: ir, dc: avgRed, rpi: rpi});
+        buffer.push({t: elapsed, r: red, ir: ir, dc: avgRed, rpi: rpi, temp: sensorData.t});
 
         // 3. Hidden Recursive Check
         let progress = elapsed / minScanDuration;
@@ -511,6 +616,10 @@
             let absRatio = baseline / meanR;
             let abs = (absRatio > 1) ? Math.log(absRatio) : 0.0001;
 
+            if (document.getElementById('debugOverlay')) {
+                document.getElementById('dbgAbs').innerText = abs.toFixed(4);
+            }
+
             let val = (cal.coefA * Math.pow(abs, 2)) + (cal.coefB * abs) + cal.intercept + (cal.personalOffset || 0);
             
             pulses.push({
@@ -562,33 +671,57 @@
 
     /**
      * Evaluates the quality of a PPG pulse wave.
-     * Scores based on Symmetry, Kurtosis (Sharpness), and AC/DC Ratio.
+     * Scores based on SDPPG (Second Derivative) Analysis and Kurtosis.
      */
     function calculatePulseScore(waveSegment) {
-        const max = Math.max(...waveSegment);
-        const min = Math.min(...waveSegment);
-        const amplitude = max - min;
-        const mean = waveSegment.reduce((a, b) => a + b, 0) / waveSegment.length;
+        const n = waveSegment.length;
+        if (n < 5) return 0;
 
-        // 1. Symmetry Score: Does the rise time match physiological norms?
-        const peakIdx = waveSegment.indexOf(max);
-        const riseTime = peakIdx;
-        const fallTime = waveSegment.length - peakIdx;
-        const symmetry = 1 - Math.abs((riseTime / fallTime) - 0.5); // Ideal ratio is ~0.5
+        // 1. Calculate First and Second Derivatives
+        let v1 = [], v2 = [];
+        for (let i = 1; i < n - 1; i++) {
+            v1.push(waveSegment[i+1] - waveSegment[i-1]); // Velocity
+        }
+        for (let i = 1; i < v1.length - 1; i++) {
+            v2.push(v1[i+1] - v1[i-1]); // Acceleration (SDPPG)
+        }
 
-        // 2. Sharpness (Kurtosis): Higher glucose/stiffer vessels create sharper peaks
-        const variance = waveSegment.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / waveSegment.length;
-        const kurtosis = waveSegment.reduce((a, b) => a + Math.pow(b - mean, 4), 0) / (waveSegment.length * Math.pow(variance, 2));
+        // 2. Identify the 'a' wave (initial positive peak) 
+        // and 'b' wave (early negative dip)
+        let a_wave = Math.max(...v2);
+        const b_wave = Math.min(...v2);
+        
+        if (a_wave < 0.0001) a_wave = 0.0001;
 
-        // 3. Signal-to-Noise: Ensure AC component is distinct from DC baseline
-        const snr = amplitude / mean; 
+        // 3. The Aging Index (AI) / Arterial Stiffness Marker
+        // Formula: (b - c - d - e) / a. We'll simplify to b/a ratio for glucose correlation.
+        const vascularRatio = Math.abs(b_wave / a_wave);
 
-        // Final weighted score (0 to 100)
-        return (symmetry * 40) + (Math.min(kurtosis, 5) * 10) + (snr * 1000);
+        // 4. Kurtosis (Sharpness) Calculation
+        const mean = waveSegment.reduce((a, b) => a + b, 0) / n;
+        const variance = waveSegment.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / n;
+        const kurtosis = waveSegment.reduce((a, b) => a + Math.pow(b - mean, 4), 0) / (n * Math.pow(variance, 2));
+
+        // 5. Final Quality Score (Hybrid Approach)
+        // Weighted Average: 30% Kurtosis (Sharpness) + 70% Vascular Ratio (Physiology)
+        // Scaled by 60 to fit 0-100 range (Threshold > 60)
+        let rawScore = (0.3 * kurtosis) + (0.7 * vascularRatio);
+        let score = rawScore * 60;
+        
+        if (document.getElementById('debugOverlay')) {
+            document.getElementById('dbgA').innerText = a_wave.toFixed(4);
+            document.getElementById('dbgB').innerText = b_wave.toFixed(4);
+            document.getElementById('dbgRatio').innerText = vascularRatio.toFixed(2);
+            drawSDPPG(v2);
+        }
+
+        // Safety: Cap the score at 100
+        return Math.min(score, 100);
     }
 
     function finishAnalysisRecursive(baseline) {
         sendCommand("STOP"); // Tell ESP32 to stop sending data
+        clearInterval(confidenceTimer);
         
         let pulses = extractPulses(buffer, baseline);
 
@@ -617,9 +750,21 @@
         // 3. Weighted Result (70% Top Pulses, 30% ZP Intercept)
         let finalVal = (topAvg * 0.7) + (zpVal * 0.3);
         
+        // Thermal Compensation
+        if (buffer.length > 0) {
+            const startTemp = buffer[0].temp || 0;
+            const endTemp = buffer[buffer.length - 1].temp || 0;
+            const tempDelta = endTemp - startTemp;
+            finalVal += (tempDelta * cal.tempCoef);
+        }
+
         // Safety Clamp
         finalVal = Math.round(finalVal);
-        if (finalVal < 50) finalVal = 50;   // Physiological Min
+        let warningMsg = "";
+        if (finalVal < 50) {
+            finalVal = 50;   // Physiological Min
+            warningMsg = " (LOW SIGNAL)";
+        }
         if (finalVal > 500) finalVal = 500; // Physiological Max
 
         document.getElementById('scanBtn').innerText = "START SENSOR SCAN";
@@ -629,6 +774,7 @@
         let statusMsg = "ANALYSIS COMPLETE";
         // If slope is significant, it means the algorithm actively compensated for pressure changes
         if (Math.abs(slope) > 50) statusMsg = "COMPLETE (PRESSURE COMPENSATED)";
+        if (warningMsg) statusMsg += warningMsg;
         updateStatus(statusMsg, "#2196f3");
         
         const logEntry = { 
@@ -655,6 +801,50 @@
         
         // Cleanup buffers after processing
         buffer = []; irBuffer = []; sessionBuffer = [];
+    }
+
+    function updateConfidence() {
+        if (buffer.length < 50) return;
+
+        // 1. Pulse Score (Last 5 pulses or max available in last 3s)
+        let recentBuffer = buffer.slice(-150); // Last 3 seconds @ 50Hz
+        let pulses = extractPulses(recentBuffer, 1); // Baseline 1 is dummy, we only need score
+        let avgScore = 0;
+        if (pulses.length > 0) {
+            let recentPulses = pulses.slice(-5);
+            let scores = recentPulses.map(p => p.score);
+            avgScore = scores.reduce((a,b)=>a+b,0) / scores.length;
+        }
+
+        // 2. BPM SD
+        let bpmScore = 0;
+        if (bpmHistory.length >= 2) {
+            let meanBpm = bpmHistory.reduce((a,b)=>a+b,0)/bpmHistory.length;
+            let variance = bpmHistory.reduce((a,b)=>a+(b-meanBpm)**2,0)/bpmHistory.length;
+            let sd = Math.sqrt(variance);
+            // Lower deviation = higher score. SD=0 -> 100, SD>=5 -> 0
+            bpmScore = Math.max(0, 100 - (sd * 20));
+        } else if (bpmHistory.length > 0) {
+            bpmScore = 100;
+        }
+
+        // 3. AvgRed Stability (Last 2 seconds = 40 samples)
+        let stabilityScore = 100;
+        let stabilityBuffer = buffer.slice(-40);
+        if (stabilityBuffer.length > 0) {
+            let dcs = stabilityBuffer.map(b => b.dc);
+            let maxDc = Math.max(...dcs);
+            let minDc = Math.min(...dcs);
+            let avgDc = dcs.reduce((a,b)=>a+b,0)/dcs.length;
+            if (avgDc > 0) {
+                let fluctuation = (maxDc - minDc) / avgDc;
+                stabilityScore = Math.max(0, 100 - (fluctuation * 2000)); // >5% -> 0
+            }
+        }
+
+        let total = (avgScore * 0.5) + (bpmScore * 0.3) + (stabilityScore * 0.2);
+        document.getElementById('confBar').style.width = total + "%";
+        document.getElementById('confPercent').innerText = Math.round(total) + "%";
     }
 
     function updateBPM() {
@@ -692,7 +882,11 @@
 
         if (durationSec > 0) {
             let bpm = (peaks / durationSec) * 60;
-            if(bpm > 40 && bpm < 200) document.getElementById('bpmVal').innerText = Math.round(bpm) + " ♥";
+            if(bpm > 40 && bpm < 200) {
+                document.getElementById('bpmVal').innerText = Math.round(bpm) + " ♥";
+                bpmHistory.push(bpm);
+                if(bpmHistory.length > 20) bpmHistory.shift();
+            }
         }
     }
 
@@ -709,6 +903,21 @@
             if(i === 0) pCtx.moveTo(x,y); else pCtx.lineTo(x,y);
         });
         pCtx.stroke();
+    }
+
+    function drawSDPPG(v2) {
+        const c = document.getElementById('sdppgGraph');
+        if(!c) return;
+        const ctx = c.getContext('2d');
+        ctx.clearRect(0,0,c.width,c.height);
+        ctx.beginPath(); ctx.strokeStyle = "#00e676"; ctx.lineWidth = 1;
+        const max = Math.max(...v2.map(Math.abs)) || 1;
+        v2.forEach((v,i) => {
+            const x = (i/v2.length)*c.width;
+            const y = (c.height/2) - ((v/max)*(c.height/2)*0.8);
+            if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+        });
+        ctx.stroke();
     }
 
     function getVariance(arr) {
@@ -745,6 +954,8 @@
         cal.finalAccuracyPercent = prevCount > 0 ? ((currentAvg * prevCount) + currentAcc) / cal.syncCount : currentAcc;
 
         history[0].actual = actual;
+        history[0].type = "SYNC";
+        deepLearningOptimization();
         saveCal();
         localStorage.setItem('tathya_hist_mac', JSON.stringify(history));
         
@@ -762,6 +973,85 @@
             absorbance: abs.toFixed(4),
             temp: lastScan.temp
         });
+    }
+
+    function optimizeCoefficients() {
+        // Only run if we have at least 3 high-quality sync points
+        const syncPoints = history.filter(h => h.actual !== "--" && h.type === "SYNC");
+        if (syncPoints.length < 3) return console.log("Need more sync data.");
+
+        let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+        const n = syncPoints.length;
+
+        syncPoints.forEach(p => {
+            const x = parseFloat(p.absorbance); // Our 'Absorbance'
+            const y = parseFloat(p.actual);    // The 'Meter' value
+            sumX += x;
+            sumY += y;
+            sumXY += x * y;
+            sumX2 += x * x;
+        });
+
+        // Solve for Linear fit: y = mx + b (where m is coefB and b is intercept)
+        const newCoefB = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+        const newIntercept = (sumY - newCoefB * sumX) / n;
+
+        console.log(`New Optimized CoefB: ${newCoefB.toFixed(2)}`);
+        console.log(`New Optimized Intercept: ${newIntercept.toFixed(2)}`);
+        
+        // Update local calibration
+        cal.coefB = newCoefB;
+        cal.intercept = newIntercept;
+        saveCal();
+    }
+
+    function deepLearningOptimization() {
+        console.log("--- Starting Deep Learning Optimization ---");
+        const syncs = history.filter(h => h.type === "SYNC" && h.actual !== "--").slice(0, 10);
+        console.log(`Found ${syncs.length} valid sync points.`);
+        if (syncs.length < 3) return console.log("Not enough data to optimize.");
+
+        let gradA = 0, gradB = 0;
+        let totalErrorSq = 0;
+        
+        syncs.forEach(s => {
+            const abs = parseFloat(s.absorbance);
+            const actual = parseFloat(s.actual);
+            if (isNaN(abs) || isNaN(actual)) return;
+
+            const pred = (cal.coefA * Math.pow(abs, 2)) + (cal.coefB * abs) + cal.intercept + (cal.personalOffset || 0);
+            const error = pred - actual;
+            totalErrorSq += error * error;
+
+            gradA += error * Math.pow(abs, 2);
+            gradB += error * abs;
+        });
+
+        console.log(`Current MSE: ${(totalErrorSq / syncs.length).toFixed(4)}`);
+        console.log(`Gradients -> gradA: ${gradA.toFixed(4)}, gradB: ${gradB.toFixed(4)}`);
+
+        const learningRate = 0.001;
+        let deltaA = -learningRate * gradA;
+        let deltaB = -learningRate * gradB;
+        
+        console.log(`Calculated Deltas -> A: ${deltaA.toFixed(6)}, B: ${deltaB.toFixed(6)}`);
+
+        const limitA = Math.abs(cal.coefA * 0.05) || 0.1;
+        const limitB = Math.abs(cal.coefB * 0.05) || 0.1;
+
+        if (Math.abs(deltaA) > limitA) {
+             console.log(`Clamping Delta A from ${deltaA.toFixed(6)} to ${Math.sign(deltaA) * limitA}`);
+             deltaA = Math.sign(deltaA) * limitA;
+        }
+        if (Math.abs(deltaB) > limitB) {
+             console.log(`Clamping Delta B from ${deltaB.toFixed(6)} to ${Math.sign(deltaB) * limitB}`);
+             deltaB = Math.sign(deltaB) * limitB;
+        }
+
+        cal.coefA += deltaA;
+        cal.coefB += deltaB;
+        console.log(`New Coefficients -> A: ${cal.coefA.toFixed(4)}, B: ${cal.coefB.toFixed(4)}`);
+        console.log("--- Optimization Complete ---");
     }
 
     function saveCal() {
