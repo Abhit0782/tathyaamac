@@ -397,7 +397,7 @@
             if (isConnected) {
                 sendCommand("START");
                 await new Promise(r => setTimeout(r, 500));
-                if (sensorData.ir > 500) { sendCommand("STOP"); alert("Too much ambient light. Please keep the sensor clear."); return; }
+                if (sensorData.ir > 20000) { sendCommand("STOP"); alert("Sensor obstructed. Please remove finger."); return; }
                 sendCommand("STOP");
             }
 
