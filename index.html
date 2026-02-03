@@ -201,13 +201,15 @@
     // Hardware-Specific Calibration Defaults
     // MAX30102 outputs ~100,000 to 200,000. Camera was 0-255.
     const defaultCal = { 
-        bInt: 120000, // Default baseline for MAX30102
-        syncCount: 0, 
-        finalAccuracyPercent: 0,
-        coefA: 0, coefB: 850, intercept: -180, // HIGH SENSITIVITY MODEL (Jan 31)
-        personalOffset: 0,
-        tempCoef: -0.12 // Thermal Compensation
-    };
+    bInt: 120000, 
+    syncCount: 0, 
+    finalAccuracyPercent: 0,
+    coefA: 88.38,  // Match code.js
+    coefB: -84.54, // Match code.js
+    intercept: 154.21, // Match code.js
+    personalOffset: 0,
+    tempCoef: -0.12 
+};
 
     function sanitizeCal(c) {
         if (!c) return null;
@@ -1134,6 +1136,7 @@
 </script>
 </body>
 </html>
+
 
 
 
