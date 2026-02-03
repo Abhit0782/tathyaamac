@@ -436,6 +436,11 @@
             // 2. Fix the 0% Accuracy Bug
             cal.finalAccuracyPercent = cloudData.accuracy || 0;
 
+            if (cloudData.lastBaseline > 0) {
+            cal.bInt = cloudData.lastBaseline; // Force hardware baseline restoration
+            console.log("Hardware Baseline Restored: " + cal.bInt);
+            }
+            cal.personalOffset = cloudData.personalOffset || 0; // Apply learned offset
             // 3. Prevent the "Enrolment Loop" by restoring the hardware baseline
             if (cloudData.lastBaseline > 0) {
                 cal.bInt = cloudData.lastBaseline;
@@ -1128,6 +1133,7 @@
 </script>
 </body>
 </html>
+
 
 
 
