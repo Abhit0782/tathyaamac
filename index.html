@@ -408,31 +408,44 @@
         }
     }
 
-    async function reviveFromCloud(name, showAlert) {
-        try {
-            const resp = await fetch(GOOGLE_SCRIPT_URL, { 
-                method: 'POST', 
-                headers: { "Content-Type": "text/plain" },
-                redirect: "follow",
-                body: JSON.stringify({type: "REVIVE_REQUEST", name: name}) 
-            });
-            const cloudData = await resp.json();
-            if (cloudData && cloudData.syncCount > 0) {
-                cal.coefA = cloudData.coefA;
-                cal.coefB = cloudData.coefB;
-                cal.intercept = cloudData.intercept;
-                cal.personalOffset = cloudData.personalOffset;
-                cal.syncCount = cloudData.syncCount;
-                cal = sanitizeCal(cal);
-                saveCal();
-                updateUI();
-                if (showAlert) alert("Tathya Memory Revived: " + name + " (Level " + cal.syncCount + ")");
-                return true;
+   async function reviveFromCloud(name, showAlert) {
+    try {
+        const resp = await fetch(GOOGLE_SCRIPT_URL, { 
+            method: 'POST', 
+            headers: { "Content-Type": "text/plain" },
+            redirect: "follow",
+            body: JSON.stringify({type: "REVIVE_REQUEST", name: name}) 
+        });
+        const cloudData = await resp.json();
+        
+        // If the cloud has a record of you (syncCount > 0)
+        if (cloudData && (cloudData.syncCount > 0 || cloudData.lastBaseline > 0)) {
+            // Apply the Smart Memory
+            cal.coefA = cloudData.coefA;
+            cal.coefB = cloudData.coefB;
+            cal.intercept = cloudData.intercept;
+            cal.personalOffset = cloudData.personalOffset;
+            cal.syncCount = cloudData.syncCount;
+            
+            // Critical: If the cloud has your hardware baseline, use it!
+            if (cloudData.lastBaseline > 0) {
+                cal.bInt = cloudData.lastBaseline;
+                enrollmentData = { name: name, baseline: cloudData.lastBaseline, type: "REVIVED" };
+                localStorage.setItem('tathya_enroll_mac', JSON.stringify(enrollmentData));
             }
-            return false;
-        } catch(e) { console.log("Offline or New User"); return false; }
-    }
 
+            cal = sanitizeCal(cal);
+            saveCal();
+            updateUI();
+            
+            // Now this message will trigger correctly
+            if (showAlert) alert("Tathya Memory Revived: " + name + " (Level " + cal.syncCount + ")");
+            console.log("Memory Loaded for: " + name);
+            return true;
+        }
+        return false;
+    } catch(e) { console.log("Cloud link failed, using local cache."); return false; }
+}
     async function startEnrollStep() {
         if(!isConnected) return alert("Sensor not connected.");
         sendCommand("START");
