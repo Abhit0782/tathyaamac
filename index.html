@@ -214,10 +214,9 @@
     function sanitizeCal(c) {
         if (!c) return null;
         // Force update if using old "stuck" coefficients
-        if (c.coefB == null || isNaN(c.coefB) || c.coefB < 500) { 
-            c.coefA = defaultCal.coefA; c.coefB = defaultCal.coefB; c.intercept = defaultCal.intercept;
-            c.personalOffset = 0; // Reset offset for new model
-        }
+        // Only reset if coefA, coefB, intercept are invalid (null/NaN)
+        if (c.coefA == null || isNaN(c.coefA)) c.coefA = defaultCal.coefA;
+        if (c.coefB == null || isNaN(c.coefB)) c.coefB = defaultCal.coefB;
         if (c.intercept == null || isNaN(c.intercept)) c.intercept = defaultCal.intercept;
         
         if (isNaN(c.personalOffset)) c.personalOffset = 0;
@@ -427,9 +426,9 @@
         // If the cloud returns a record with history
         if (cloudData && (cloudData.syncCount > 0 || cloudData.lastBaseline > 0)) {
             // Force the global calibration object to use cloud values
-            cal.personalOffset = parseFloat(cloudData.personalOffset) || 0;
-            cal.intercept = parseFloat(cloudData.intercept) || -180;
-            cal.syncCount = parseInt(cloudData.syncCount) || 0;
+            cal.personalOffset = parseFloat(cloudData.personalOffset) || 0; // This is now calculated in cloud
+            cal.intercept = parseFloat(cloudData.intercept) || defaultCal.intercept; // Use defaultCal.intercept as fallback
+            cal.syncCount = parseInt(cloudData.syncCount) || 0; // This is now calculated in cloud
             cal.bInt = parseFloat(cloudData.lastBaseline) || 120000;
             // 1. Update the Calibration Object with Cloud Learning
             cal.coefA = cloudData.coefA;
@@ -437,7 +436,7 @@
                        
             // 2. Fix the 0% Accuracy Bug
             cal.finalAccuracyPercent = cloudData.accuracy || 0;
-
+            
             if (cloudData.lastBaseline > 0) {
             cal.bInt = cloudData.lastBaseline; // Force hardware baseline restoration
             console.log("Hardware Baseline Restored: " + cal.bInt);
@@ -1014,7 +1013,10 @@
             date: new Date().toLocaleDateString(),
             time: new Date().toLocaleTimeString(),
             absorbance: abs.toFixed(4),
-            temp: lastScan.temp
+            temp: lastScan.temp,
+            coefA: cal.coefA, // Send current coefficients to be logged
+            coefB: cal.coefB,
+            intercept: cal.intercept
         });
     }
 
@@ -1136,9 +1138,3 @@
 </script>
 </body>
 </html>
-
-
-
-
-
-
