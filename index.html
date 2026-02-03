@@ -808,18 +808,19 @@
         if (warningMsg) statusMsg += warningMsg;
         updateStatus(statusMsg, "#2196f3");
         
-        const logEntry = { 
-            date: new Date().toLocaleDateString(), 
-            time: new Date().toLocaleTimeString(), 
-            val: finalVal, 
-            raw: topPulses[0].meanR.toFixed(0), 
-            actual: "--", 
-            type: "REC_SCAN", 
-            finger: currentFinger, 
-            absorbance: Math.log(baseline/topPulses[0].meanR).toFixed(4),
-            noise: "0.00", 
-            temp: sensorData.t || 0
-        };
+       const logEntry = { 
+        name: enrollmentData ? enrollmentData.name : "Anonymous", // ADD THIS LINE
+        date: new Date().toLocaleDateString(), 
+        time: new Date().toLocaleTimeString(), 
+        val: finalVal, 
+        raw: topPulses[0].meanR.toFixed(0), 
+        actual: "--", 
+        type: "REC_SCAN", 
+        finger: currentFinger, 
+        absorbance: Math.log(baseline/topPulses[0].meanR).toFixed(4),
+        noise: "0.00", 
+        temp: sensorData.t || 0
+};
 
         history.unshift(logEntry); if(history.length > 10) history.pop();
         localStorage.setItem('tathya_hist_mac', JSON.stringify(history));
@@ -995,6 +996,7 @@
 
         // Send Sync to Cloud
         sendToDatabase({
+            name: enrollmentData ? enrollmentData.name : "Anonymous", // ADD THIS LINE
             type: "SYNC",
             val: predictedVal,
             actual: actual,
@@ -1124,5 +1126,6 @@
 </script>
 </body>
 </html>
+
 
 
