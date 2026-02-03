@@ -210,11 +210,10 @@
     personalOffset: 0,
     tempCoef: -0.12 
 };
-
     function sanitizeCal(c) {
         if (!c) return null;
         // Force update if using old "stuck" coefficients
-        if (c.coefB == null || isNaN(c.coefB) || c.coefB < 500) { 
+        if (c.coefB == null || isNaN(c.coefB)) { 
             c.coefA = defaultCal.coefA; c.coefB = defaultCal.coefB; c.intercept = defaultCal.intercept;
             c.personalOffset = 0; // Reset offset for new model
         }
@@ -417,8 +416,8 @@
   async function reviveFromCloud(name, showAlert) {
     try {
         const resp = await fetch(GOOGLE_SCRIPT_URL, { 
-            method: 'POST', 
-            headers: { "Content-Type": "text/plain" },
+            method: 'POST',
+            headers: { "Content-Type": "application/json" }, // Corrected for consistency
             redirect: "follow",
             body: JSON.stringify({type: "REVIVE_REQUEST", name: name}) 
         });
@@ -478,8 +477,8 @@
         
         // Ambient Guard
         await new Promise(r => setTimeout(r, 500));
-        if (sensorData.ir > 500 && sensorData.ir < 2000) { 
-            sendCommand("STOP"); alert("Please shade the sensor from bright light."); return; 
+        if (sensorData.ir < 2000) { 
+            sendCommand("STOP"); alert("Finger not detected. Please place finger firmly."); return; 
         }
 
         document.getElementById('enrollBtn').disabled = true;
@@ -994,7 +993,7 @@
         const prevCount = cal.syncCount - 1;
         const currentAvg = cal.finalAccuracyPercent || 0;
         cal.finalAccuracyPercent = prevCount > 0 ? ((currentAvg * prevCount) + currentAcc) / cal.syncCount : currentAcc;
-
+        const currentName = enrollmentData ? enrollmentData.name : document.getElementById('userName').value;
         history[0].actual = actual;
         history[0].type = "SYNC";
         deepLearningOptimization();
@@ -1003,10 +1002,10 @@
         
         updateUI(); renderLog(); 
         alert("Hardware Profile Updated!");
-
+        
         // Send Sync to Cloud
         sendToDatabase({
-            name: enrollmentData ? enrollmentData.name : "Anonymous", // ADD THIS LINE
+            name: currentName, // Use the detected name
             type: "SYNC",
             val: predictedVal,
             actual: actual,
@@ -1136,10 +1135,3 @@
 </script>
 </body>
 </html>
-
-
-
-
-
-
-
