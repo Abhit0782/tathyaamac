@@ -658,6 +658,7 @@
                 document.getElementById('dbgAbs').innerText = abs.toFixed(4);
             }
 
+            // Ensure this specific line includes the personalOffset
             let val = (cal.coefA * Math.pow(abs, 2)) + (cal.coefB * abs) + cal.intercept + (cal.personalOffset || 0);
             
             pulses.push({
@@ -1133,6 +1134,7 @@
 </script>
 </body>
 </html>
+
 
 
 
