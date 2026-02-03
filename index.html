@@ -424,14 +424,15 @@
         
         // If the cloud returns a record with history
         if (cloudData && (cloudData.syncCount > 0 || cloudData.lastBaseline > 0)) {
-            
+            // Force the global calibration object to use cloud values
+            cal.personalOffset = parseFloat(cloudData.personalOffset) || 0;
+            cal.intercept = parseFloat(cloudData.intercept) || -180;
+            cal.syncCount = parseInt(cloudData.syncCount) || 0;
+            cal.bInt = parseFloat(cloudData.lastBaseline) || 120000;
             // 1. Update the Calibration Object with Cloud Learning
             cal.coefA = cloudData.coefA;
             cal.coefB = cloudData.coefB;
-            cal.intercept = cloudData.intercept;
-            cal.personalOffset = cloudData.personalOffset;
-            cal.syncCount = cloudData.syncCount;
-            
+                       
             // 2. Fix the 0% Accuracy Bug
             cal.finalAccuracyPercent = cloudData.accuracy || 0;
 
@@ -536,7 +537,8 @@
         avgRed = 0;
         
         // Get Baseline for RPI Calculation
-        let storedBase = (enrollmentData && enrollmentData.baseline) ? parseFloat(enrollmentData.baseline) : 120000;
+        // Change this line in runAnalysis()
+        let storedBase = cal.bInt; // Use the revived hardware baseline directly
         if(cal.bInt && cal.bInt > 0) storedBase = cal.bInt;
 
         updateStatus("ANALYZING BIO-SIGNALS...", "#2196f3");
@@ -1126,6 +1128,7 @@
 </script>
 </body>
 </html>
+
 
 
 
