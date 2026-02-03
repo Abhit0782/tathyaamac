@@ -240,12 +240,16 @@
     let bpmHistory = [];
 
     function init() {
-        updateUI(); drawTrend(); renderLog();
-        if(enrollmentData && enrollmentData.name) {
-            document.getElementById('userName').value = enrollmentData.name;
-            updateStatus("WELCOME BACK, " + enrollmentData.name.toUpperCase(), "#2196f3");
-        }
+    updateUI(); 
+    drawTrend(); 
+    renderLog();
+    if(enrollmentData && enrollmentData.name) {
+        document.getElementById('userName').value = enrollmentData.name;
+        // This ensures the accuracy bar reflects the cloud memory on startup
+        updateUI(); 
+        updateStatus("WELCOME BACK, " + enrollmentData.name.toUpperCase(), "#2196f3");
     }
+}
 
     // --- DATABASE ENGINE ---
     function sendToDatabase(payload) {
@@ -1120,4 +1124,5 @@
 </script>
 </body>
 </html>
+
 
