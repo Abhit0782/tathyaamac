@@ -1059,42 +1059,38 @@
     }
 
     function deepLearningOptimization() {
-        console.log("--- Autonomous Profile Discovery ---");
+        console.log("--- High-Sensitivity Slope Discovery ---");
         const syncs = history.filter(h => h.type === "SYNC" && h.actual !== "--").slice(0, 15);
         if (syncs.length < 3) return;
 
-        let gradB = 0, gradIntercept = 0;
-        // We increase the Learning Rate so the app can 'stretch' the model to reach 100 or 300 mg/dL
-        const learningRate = 0.5; 
-        const momentum = 0.8;
+        let gradB = 0;
+        const learningRateB = 1.5; // Aggressive rate to break the 170-180 floor
+        const momentum = 0.85;
 
         syncs.forEach(s => {
             const abs = parseFloat(s.absorbance);
             const actual = parseFloat(s.actual);
-            // Current prediction calculation
+            
+            // Prediction using the locked intercept
             const pred = (cal.coefA * Math.pow(abs, 2)) + (cal.coefB * abs) + cal.intercept + (cal.personalOffset || 0);
             const error = pred - actual;
 
-            // Focus on CoefB (the Slope) as it's the key to high/low sensitivity
+            // Force all learning into the Slope (B)
             gradB += error * abs;
-            gradIntercept += error;
         });
 
         gradB /= syncs.length;
-        gradIntercept /= syncs.length;
 
-        // Apply Momentum to the discovery process
-        velocityB = (momentum * velocityB) + (learningRate * gradB);
-        velocityI = (momentum * velocityI) + (learningRate * gradIntercept);
+        // Build momentum only for the slope
+        velocityB = (momentum * velocityB) + (learningRateB * gradB);
 
-        // Update the coefficients based on the error
+        // Update the slope
         cal.coefB -= velocityB;
-        cal.intercept -= velocityI;
 
-        // Remove the restrictive clamping so the app can find your true -400 or -600 slope
-        cal.coefB = Math.max(-1000, Math.min(-10, cal.coefB)); 
+        // Allow the slope to expand significantly to cover 100-point swings
+        cal.coefB = Math.max(-1200, Math.min(-10, cal.coefB)); 
         
-        console.log(`Autonomous Shift -> CoefB: ${cal.coefB.toFixed(2)}, Intercept: ${cal.intercept.toFixed(2)}`);
+        console.log(`Slope Optimized -> CoefB: ${cal.coefB.toFixed(2)} | Intercept Locked: ${cal.intercept.toFixed(2)}`);
     }
 
     function saveCal() {
