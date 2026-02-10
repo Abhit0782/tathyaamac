@@ -241,6 +241,7 @@
     let bpmHistory = [];
     let velocityA = 0;
     let velocityB = 0;
+    let velocityI = 0;
 
     function init() {
     updateUI(); 
@@ -829,9 +830,14 @@
         type: "REC_SCAN", 
         finger: currentFinger, 
         absorbance: Math.log(baseline/topPulses[0].meanR).toFixed(4),
-        noise: "0.00", 
-        temp: sensorData.t || 0
-};
+        noise: "0.00",
+        temp: sensorData.t || 0,
+        // CRITICAL: Send the actual learned coefficients to the cloud
+        coefA: cal.coefA,
+        coefB: cal.coefB,
+        intercept: cal.intercept,
+        personalOffset: cal.personalOffset || 0
+    };
 
         history.unshift(logEntry); if(history.length > 10) history.pop();
         localStorage.setItem('tathya_hist_mac', JSON.stringify(history));
@@ -1052,48 +1058,44 @@
         saveCal();
     }
 
-function deepLearningOptimization() {
-    console.log("--- Starting Momentum-Based Optimization ---");
-    const syncs = history.filter(h => h.type === "SYNC" && h.actual !== "--").slice(0, 10);
-    if (syncs.length < 3) return console.log("Not enough data to optimize.");
+    function deepLearningOptimization() {
+        console.log("--- Autonomous Profile Discovery ---");
+        const syncs = history.filter(h => h.type === "SYNC" && h.actual !== "--").slice(0, 15);
+        if (syncs.length < 3) return;
 
-    let gradA = 0, gradB = 0;
-    const learningRate = 0.0005; // Slightly lower rate for stability
-    const momentum = 0.9;        // The "Memory" factor
+        let gradB = 0, gradIntercept = 0;
+        // We increase the Learning Rate so the app can 'stretch' the model to reach 100 or 300 mg/dL
+        const learningRate = 0.5; 
+        const momentum = 0.8;
 
         syncs.forEach(s => {
             const abs = parseFloat(s.absorbance);
             const actual = parseFloat(s.actual);
-            if (isNaN(abs) || isNaN(actual)) return;
-
-        // Calculate prediction using current coefficients
+            // Current prediction calculation
             const pred = (cal.coefA * Math.pow(abs, 2)) + (cal.coefB * abs) + cal.intercept + (cal.personalOffset || 0);
             const error = pred - actual;
 
-        // Gradients for Quadratic and Linear terms
-            gradA += error * Math.pow(abs, 2);
+            // Focus on CoefB (the Slope) as it's the key to high/low sensitivity
             gradB += error * abs;
+            gradIntercept += error;
         });
 
-    // Normalize gradients by number of samples
-    gradA /= syncs.length;
-    gradB /= syncs.length;
+        gradB /= syncs.length;
+        gradIntercept /= syncs.length;
 
-    // Apply Momentum: Velocity = (Momentum * Old Velocity) + (Learning Rate * Gradient)
-    velocityA = (momentum * velocityA) + (learningRate * gradA);
-    velocityB = (momentum * velocityB) + (learningRate * gradB);
+        // Apply Momentum to the discovery process
+        velocityB = (momentum * velocityB) + (learningRate * gradB);
+        velocityI = (momentum * velocityI) + (learningRate * gradIntercept);
 
-    // Update coefficients by subtracting the velocity
-    cal.coefA -= velocityA;
-    cal.coefB -= velocityB;
+        // Update the coefficients based on the error
+        cal.coefB -= velocityB;
+        cal.intercept -= velocityI;
 
-    // Safety: Prevent coefficients from drifting into physically impossible territory
-    cal.coefA = Math.max(50, Math.min(120, cal.coefA)); 
-    cal.coefB = Math.max(-250, Math.min(-50, cal.coefB));
-
-    console.log(`New Coefficients -> A: ${cal.coefA.toFixed(4)}, B: ${cal.coefB.toFixed(4)}`);
-    console.log("--- Optimization Complete ---");
-}
+        // Remove the restrictive clamping so the app can find your true -400 or -600 slope
+        cal.coefB = Math.max(-1000, Math.min(-10, cal.coefB)); 
+        
+        console.log(`Autonomous Shift -> CoefB: ${cal.coefB.toFixed(2)}, Intercept: ${cal.intercept.toFixed(2)}`);
+    }
 
     function saveCal() {
         fingerProfiles[currentFinger] = cal;
