@@ -239,6 +239,8 @@
     let avgRed = 0;
     let errorCount = 0;
     let bpmHistory = [];
+    let velocityA = 0;
+    let velocityB = 0;
 
     function init() {
     updateUI(); 
@@ -1050,54 +1052,48 @@
         saveCal();
     }
 
-    function deepLearningOptimization() {
-        console.log("--- Starting Deep Learning Optimization ---");
-        const syncs = history.filter(h => h.type === "SYNC" && h.actual !== "--").slice(0, 10);
-        console.log(`Found ${syncs.length} valid sync points.`);
-        if (syncs.length < 3) return console.log("Not enough data to optimize.");
+function deepLearningOptimization() {
+    console.log("--- Starting Momentum-Based Optimization ---");
+    const syncs = history.filter(h => h.type === "SYNC" && h.actual !== "--").slice(0, 10);
+    if (syncs.length < 3) return console.log("Not enough data to optimize.");
 
-        let gradA = 0, gradB = 0;
-        let totalErrorSq = 0;
-        
+    let gradA = 0, gradB = 0;
+    const learningRate = 0.0005; // Slightly lower rate for stability
+    const momentum = 0.9;        // The "Memory" factor
+
         syncs.forEach(s => {
             const abs = parseFloat(s.absorbance);
             const actual = parseFloat(s.actual);
             if (isNaN(abs) || isNaN(actual)) return;
 
+        // Calculate prediction using current coefficients
             const pred = (cal.coefA * Math.pow(abs, 2)) + (cal.coefB * abs) + cal.intercept + (cal.personalOffset || 0);
             const error = pred - actual;
-            totalErrorSq += error * error;
 
+        // Gradients for Quadratic and Linear terms
             gradA += error * Math.pow(abs, 2);
             gradB += error * abs;
         });
 
-        console.log(`Current MSE: ${(totalErrorSq / syncs.length).toFixed(4)}`);
-        console.log(`Gradients -> gradA: ${gradA.toFixed(4)}, gradB: ${gradB.toFixed(4)}`);
+    // Normalize gradients by number of samples
+    gradA /= syncs.length;
+    gradB /= syncs.length;
 
-        const learningRate = 0.001;
-        let deltaA = -learningRate * gradA;
-        let deltaB = -learningRate * gradB;
-        
-        console.log(`Calculated Deltas -> A: ${deltaA.toFixed(6)}, B: ${deltaB.toFixed(6)}`);
+    // Apply Momentum: Velocity = (Momentum * Old Velocity) + (Learning Rate * Gradient)
+    velocityA = (momentum * velocityA) + (learningRate * gradA);
+    velocityB = (momentum * velocityB) + (learningRate * gradB);
 
-        const limitA = Math.abs(cal.coefA * 0.05) || 0.1;
-        const limitB = Math.abs(cal.coefB * 0.05) || 0.1;
+    // Update coefficients by subtracting the velocity
+    cal.coefA -= velocityA;
+    cal.coefB -= velocityB;
 
-        if (Math.abs(deltaA) > limitA) {
-             console.log(`Clamping Delta A from ${deltaA.toFixed(6)} to ${Math.sign(deltaA) * limitA}`);
-             deltaA = Math.sign(deltaA) * limitA;
-        }
-        if (Math.abs(deltaB) > limitB) {
-             console.log(`Clamping Delta B from ${deltaB.toFixed(6)} to ${Math.sign(deltaB) * limitB}`);
-             deltaB = Math.sign(deltaB) * limitB;
-        }
+    // Safety: Prevent coefficients from drifting into physically impossible territory
+    cal.coefA = Math.max(50, Math.min(120, cal.coefA)); 
+    cal.coefB = Math.max(-250, Math.min(-50, cal.coefB));
 
-        cal.coefA += deltaA;
-        cal.coefB += deltaB;
-        console.log(`New Coefficients -> A: ${cal.coefA.toFixed(4)}, B: ${cal.coefB.toFixed(4)}`);
-        console.log("--- Optimization Complete ---");
-    }
+    console.log(`New Coefficients -> A: ${cal.coefA.toFixed(4)}, B: ${cal.coefB.toFixed(4)}`);
+    console.log("--- Optimization Complete ---");
+}
 
     function saveCal() {
         fingerProfiles[currentFinger] = cal;
