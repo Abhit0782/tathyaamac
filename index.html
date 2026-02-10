@@ -1100,10 +1100,42 @@ function deepLearningOptimization() {
         localStorage.setItem('tathya_fingers_mac', JSON.stringify(fingerProfiles));
     }
 
+    function getModelHealth() {
+        // 1. Base score from number of syncs (needs at least 5 for 'High' health)
+        let syncCount = cal.syncCount || 0;
+        let syncScore = Math.min(syncCount * 20, 60); // Max 60% from count
+
+        // 2. Velocity score (lower movement = higher stability)
+        // We look at the combined 'speed' of our momentum variables
+        let velocity = Math.abs(velocityA) + Math.abs(velocityB);
+        let stabilityScore = 0;
+        
+        if (syncCount >= 3) {
+            // If velocity is near zero, the model has 'locked in'
+            stabilityScore = Math.max(0, 40 - (velocity * 100)); 
+        }
+
+        return Math.round(syncScore + stabilityScore);
+    }
+
     function updateUI() {
         const accuracy = cal.finalAccuracyPercent || 0;
+        const health = getModelHealth();
+        
+        // Update the existing Accuracy Bar
         document.getElementById('calBar').style.width = accuracy + "%";
-        document.getElementById('calText').innerText = "Sensor Accuracy: " + accuracy.toFixed(1) + "%";
+        
+        // Update the status message with a Health Check
+        let healthStatus = "LEARNING PROFILE...";
+        if (health > 80) healthStatus = "MODEL STABILIZED (BIO-SYNCED)";
+        else if (health > 50) healthStatus = "REFINING CALIBRATION...";
+        
+        document.getElementById('calText').innerHTML = 
+            `Accuracy: ${accuracy.toFixed(1)}% | Health: ${health}%`;
+        document.getElementById('statusMsg').innerText = healthStatus;
+        
+        // Change bar color based on health
+        document.getElementById('calBar').style.background = health > 80 ? "#00e676" : "#f44336";
     }
 
     function hardReset() {
