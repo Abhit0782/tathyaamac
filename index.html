@@ -806,7 +806,7 @@
                 
                 // This gain anticipates where the glucose is heading. Increased to match
                 // high-velocity metabolism and overpower the static model's "anchor".
-                const kineticGain = -15000; 
+                const kineticGain = -23000; 
                 const anticipatedShift = velocity * kineticGain;
                 finalVal += anticipatedShift;
                 slope = anticipatedShift; // Use adjustment magnitude for status
@@ -1191,3 +1191,4 @@
 </script>
 </body>
 </html>
+
