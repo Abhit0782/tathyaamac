@@ -795,33 +795,48 @@
         let topCount = Math.max(3, Math.ceil(pulses.length * 0.2));
         let topPulses = pulses.slice(0, topCount);
 
-        // --- MASTER ANALYSIS ENGINE CALL ---
-        let finalVal = analyzeGlucoseIndependent(baseline, topPulses[0].meanR);
-        let velocity = lastKineticState.velocity; // For logging
-        let slope = 0; // Keep slope for status message
-        // The new function logs the kinetic shift internally and applies safety clamps.
-        // --- END MASTER ANALYSIS ENGINE CALL ---
+        // Calculate Absorbance
+        let currentR = topPulses[0].meanR;
+        let absRatio = baseline / currentR;
+        let abs = (absRatio > 1) ? Math.log(absRatio) : 0.0001;
+
+        // Update Kinetic State (Velocity Tracking)
+        let now = Date.now();
+        let timeDelta = (now - lastKineticState.time) / 60000;
+        let velocity = 0;
+        if (timeDelta > 0.5) {
+             let rawVelocity = (abs - lastKineticState.abs) / timeDelta;
+             smoothedVelocity = (0.3 * rawVelocity) + (0.7 * smoothedVelocity);
+             velocity = smoothedVelocity;
+        }
+        lastKineticState = { abs: abs, time: now, velocity: velocity };
+
+        // AI PREDICTION
+        let rawPred = (cal.coefA * Math.pow(abs, 2)) + (cal.coefB * abs) + cal.intercept + (cal.personalOffset || 0);
         
         // Thermal Compensation
         if (buffer.length > 0) {
             const startTemp = buffer[0].temp || 0;
             const endTemp = buffer[buffer.length - 1].temp || 0;
             const tempDelta = endTemp - startTemp;
-            finalVal += (tempDelta * cal.tempCoef);
+            rawPred += (tempDelta * cal.tempCoef);
         }
 
-        // PHYSIOLOGICAL GATE: Root Solution for 90% Accuracy
-        let lastVal = history.length > 0 ? history[0].val : finalVal;
-        let maxPossibleChange = 5 * ( (Date.now() - lastKineticState.time) / 60000 ); // Max 5mg/dL per minute
-
-        // If the jump is too big, the AI "filters" it
-        if (Math.abs(finalVal - lastVal) > maxPossibleChange && history.length > 0) {
-            console.log("AI Filter: Suppressing impossible jump.");
-            finalVal = lastVal + (Math.sign(finalVal - lastVal) * 2); // Allow only a tiny move
+        // PHYSIOLOGICAL GATE: Max change of 3mg/dL per minute
+        if (history.length > 0) {
+            let lastLog = history[0];
+            let timeDiffMin = (Date.now() - lastLog.timestamp) / 60000;
+            let maxChange = 3 * timeDiffMin; 
+            
+            // Clamp the result to biological reality
+            if (Math.abs(rawPred - lastLog.val) > maxChange) {
+                rawPred = lastLog.val + (Math.sign(rawPred - lastLog.val) * maxChange);
+                console.log("AI Safety: Clamped to biological limit.");
+            }
         }
 
         // The new analysis function includes its own safety clamps.
-        finalVal = Math.round(finalVal);
+        let finalVal = Math.round(rawPred);
 
         let statusMsg = "ANALYSIS COMPLETE";
         updateStatus(statusMsg, "#2196f3");
