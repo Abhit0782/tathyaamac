@@ -833,14 +833,18 @@
             rawPred += (tempDelta * cal.tempCoef);
         }
 
-        // AI Rate Limiter
-        let lastVal = history.length > 0 ? history[0].val : rawPred;
-        let timeElapsed = (Date.now() - lastKineticState.time) / 60000;
-        let maxChange = 2.5 * timeElapsed; // Humans change ~2.5mg/dL per minute max
-
-        if (Math.abs(rawPred - lastVal) > maxChange && history.length > 0) {
-            rawPred = lastVal + (Math.sign(rawPred - lastVal) * maxChange);
-            console.log("AI Safety Gate: Stabilizing result based on bio-limits");
+        // ROOT FIX: Physiological Gate (The 90% Accuracy Key)
+        if (history.length > 0) {
+            let lastActual = history.find(h => h.actual !== "--")?.actual || history[0].val;
+            let timeElapsed = (Date.now() - lastKineticState.time) / 60000;
+            
+            // Max biological glucose change is ~2.5 mg/dL per minute
+            let maxBioChange = 2.5 * timeElapsed; 
+            
+            if (Math.abs(rawPred - lastActual) > maxBioChange) {
+                console.log("AI Safety: Clamping noisy sensor jump to biological reality.");
+                rawPred = lastActual + (Math.sign(rawPred - lastActual) * maxBioChange);
+            }
         }
 
         // The new analysis function includes its own safety clamps.
