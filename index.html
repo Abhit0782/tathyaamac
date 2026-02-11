@@ -814,16 +814,15 @@
         // Calculate the base prediction
         let basePred = (cal.coefA * Math.pow(abs, 2)) + (cal.coefB * abs) + cal.intercept;
 
-        // ROOT FIX: Vascular Offset
-        // If stiffness is high (>45), it usually causes overestimation. 
-        // We subtract an offset to stay accurate.
-        let stiffnessOffset = 0;
-        let vascularRatio = topPulses[0].vascularRatio || 0;
-        if (vascularRatio > 45) {
-            stiffnessOffset = (vascularRatio - 45) * 0.4; 
+        // VASCULAR COMPENSATION (Root Solution for Accuracy)
+        // Your baseline stiffness is roughly 45. At 13.5, we subtract to compensate for dilated vessels.
+        let stiffnessCorrection = 0;
+        let vascularRatio = topPulses[0].vascularRatio || 45; // Use a neutral default
+        if (vascularRatio < 40) {
+            stiffnessCorrection = (40 - vascularRatio) * 0.8; 
         }
         
-        let rawPred = basePred - stiffnessOffset + (cal.personalOffset || 0);
+        let rawPred = basePred - stiffnessCorrection + (cal.personalOffset || 0);
 
         // Thermal Compensation
         if (buffer.length > 0) {
