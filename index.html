@@ -1078,8 +1078,13 @@
 
         // 1. Calculate the 'Kinetic' move as we did before
         let timeDelta = (Date.now() - lastKineticState.time) / 60000;
+        if (timeDelta < 0.1) timeDelta = 1.0; // Prevent division by zero
+
         let rawVelocity = (currentAbs - lastKineticState.abs) / timeDelta;
         smoothedVelocity = (0.2 * rawVelocity) + (0.8 * smoothedVelocity);
+        
+        // We reduce damping to 0.6 so it catches the 200+ spikes faster
+        smoothedVelocity = (0.4 * rawVelocity) + (0.6 * smoothedVelocity);
         
         let kineticAdjustment = smoothedVelocity * -35000;
         let rawFinal = staticPred + kineticAdjustment;
@@ -1088,6 +1093,7 @@
         // Glucose rarely moves faster than 3.5mg/dL per minute.
         // This caps the change to prevent large 'noise' jumps.
         let maxChange = timeDelta * 3.5; 
+        let maxChange = timeDelta * 4.0; // Increased to 4.0 for faster 250+ tracking
         let changeRequest = rawFinal - lastValidatedGlucose;
         
         // Limit the move
@@ -1095,10 +1101,17 @@
         let finalGlucose = lastValidatedGlucose + validatedChange;
 
         // 3. Update Memory
+        // --- FIX: Store velocity so it appears in your logs ---
         lastValidatedGlucose = finalGlucose;
         lastKineticState = { abs: currentAbs, time: Date.now() };
+        lastKineticState = { 
+            abs: currentAbs, 
+            time: Date.now(), 
+            velocity: smoothedVelocity // Fixed: Now correctly passed to finishAnalysis
+        };
 
         return Math.max(70, Math.min(300, finalGlucose));
+        return Math.max(70, Math.min(350, finalGlucose));
     }
 
     /**
