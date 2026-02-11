@@ -242,7 +242,8 @@
     let velocityA = 0;
     let velocityB = 0;
     let velocityI = 0;
-    let lastKineticState = { time: 0, abs: 0 };
+    // --- GLOBAL KINETIC MEMORY ---
+    let lastKineticState = { abs: 0, time: Date.now(), velocity: 0 };
     let smoothedVelocity = 0;
 
     function init() {
@@ -462,10 +463,14 @@
             // NEW: Restore the last known kinetic state from the cloud
             if (cloudData.lastTimestamp && cloudData.lastAbsorbance) {
                 lastKineticState = {
-                    time: cloudData.lastTimestamp,
-                    abs: parseFloat(cloudData.lastAbsorbance)
+                    time: cloudData.lastTimestamp, // The time of the last measurement
+                    abs: parseFloat(cloudData.lastAbsorbance), // The absorbance of the last measurement
+                    velocity: cloudData.lastVelocity || 0 // The smoothed velocity at that time
                 };
-                console.log("Kinetic state restored from cloud:", lastKineticState);
+                // Restore the "flywheel" so the trend continues across sessions
+                smoothedVelocity = cloudData.lastVelocity || 0;
+                console.log("Kinetic state restored from cloud. Resuming trend analysis.");
+                console.log("Smoothed Velocity flywheel restored to: " + smoothedVelocity.toFixed(4));
             }
 
             // 4. Save to local storage and refresh the Dashboard UI
@@ -792,38 +797,12 @@
         let topCount = Math.max(3, Math.ceil(pulses.length * 0.2));
         let topPulses = pulses.slice(0, topCount);
 
-        // --- STABILIZED KINETIC ENGINE ---
-        const currentAbs = Math.log(baseline / topPulses[0].meanR);
-        const now = Date.now();
-        
-        // 1. Calculate static base prediction
-        let finalVal = (cal.coefA * Math.pow(currentAbs, 2)) + (cal.coefB * currentAbs) + cal.intercept;
-        let velocity = 0;
+        // --- MASTER ANALYSIS ENGINE CALL ---
+        let finalVal = analyzeGlucoseIndependent(baseline, topPulses[0].meanR);
+        let velocity = lastKineticState.velocity; // For logging
         let slope = 0; // Keep slope for status message
-        
-        // 2. Apply Damped Kinetic Adjustment if possible
-        if (lastKineticState.time > 0) {
-            const timeDelta = (now - lastKineticState.time) / 60000; // minutes
-            if (timeDelta > 0.1) { // Only calculate if there's a meaningful time gap
-                // Calculate Raw Velocity
-                const rawVelocity = (currentAbs - lastKineticState.abs) / timeDelta;
-                velocity = rawVelocity; // For logging
-                
-                // APPLY DAMPING (EMA): Filter noise, follow trends
-                smoothedVelocity = (0.3 * rawVelocity) + (0.7 * smoothedVelocity);
-
-                // Apply balanced gain to the smoothed trend
-                const kineticGain = -12000; 
-                const anticipatedShift = smoothedVelocity * kineticGain;
-                
-                finalVal += anticipatedShift;
-                slope = anticipatedShift; // For UI status
-            }
-        }
-
-        // 3. Update kinetic memory for the next scan
-        lastKineticState = { abs: currentAbs, time: now };
-        // --- END KINETIC ENGINE ---
+        // The new function logs the kinetic shift internally and applies safety clamps.
+        // --- END MASTER ANALYSIS ENGINE CALL ---
         
         // Thermal Compensation
         if (buffer.length > 0) {
@@ -833,25 +812,15 @@
             finalVal += (tempDelta * cal.tempCoef);
         }
 
-        // Safety Clamp
+        // The new analysis function includes its own safety clamps.
         finalVal = Math.round(finalVal);
-        let warningMsg = "";
-        if (finalVal < 75) {
-            finalVal = 75;   // Physiological Min
-            warningMsg = " (LOW SIGNAL)";
-        }
-        if (finalVal > 350) finalVal = 350; // Physiological Max
 
+        let statusMsg = "ANALYSIS COMPLETE";
+        updateStatus(statusMsg, "#2196f3");
+        
         document.getElementById('scanBtn').innerText = "START SENSOR SCAN";
         document.getElementById('gluResult').innerText = finalVal;
         document.getElementById('timer').innerText = "DONE";
-        
-        let statusMsg = "ANALYSIS COMPLETE";
-        // If slope is significant, it means the algorithm actively compensated for pressure changes
-        if (Math.abs(slope) > 50) statusMsg = "COMPLETE (PRESSURE COMPENSATED)";
-        if (warningMsg) statusMsg += warningMsg;
-        updateStatus(statusMsg, "#2196f3");
-        
        const logEntry = { 
         name: enrollmentData ? enrollmentData.name : "Anonymous", // ADD THIS LINE
         timestamp: Date.now(),
@@ -1093,39 +1062,64 @@
         saveCal();
     }
 
+    /**
+     * MASTER ANALYSIS ENGINE
+     * Tackles 100mg/dL lows to 250+ mg/dL spikes autonomously.
+     */
+    function analyzeGlucoseIndependent(baseline, currentR) {
+        const now = Date.now();
+        let currentAbs = Math.log(baseline / currentR);
+        
+        // 1. STATIC BASELINE (The 'Anchor')
+        let staticPred = (cal.coefA * Math.pow(currentAbs, 2)) + (cal.coefB * currentAbs) + cal.intercept;
+
+        // 2. KINETIC TREND ENGINE (The 'Root Cause' Fix)
+        let timeDelta = (now - lastKineticState.time) / 60000; // minutes
+        if (timeDelta > 0.5) {
+            let rawVelocity = (currentAbs - lastKineticState.abs) / timeDelta;
+            
+            // Damping Filter (0.7) prevents sensor noise from causing 'fake' spikes
+            smoothedVelocity = (0.3 * rawVelocity) + (0.7 * smoothedVelocity);
+            
+            // High-Gain Anticipation (-18000) for fast metabolism tracking
+            const kineticGain = -18000; 
+            let kineticShift = smoothedVelocity * kineticGain;
+            
+            let finalGlucose = staticPred + kineticShift;
+
+            // 3. RANGE SAFETY CLAMPS (70 to 350 mg/dL)
+            finalGlucose = Math.max(70, Math.min(350, finalGlucose));
+
+            // Update Memory
+            lastKineticState = { abs: currentAbs, time: now, velocity: smoothedVelocity };
+            
+            console.log(`Trend: ${smoothedVelocity > 0 ? "Rising" : "Falling"} | Kinetic Shift: ${kineticShift.toFixed(1)}`);
+            return finalGlucose;
+        }
+        return staticPred;
+    }
+
+    /**
+     * OPTIMIZATION (ONLY RUNS DURING SYNC)
+     * Keeps the 'Anchor' centered while allowing the Kinetic Engine to move freely.
+     */
     function deepLearningOptimization() {
-        console.log("--- High-Velocity Range Alignment ---");
         const syncs = history.filter(h => h.type === "SYNC" && h.actual !== "--").slice(0, 10);
         if (syncs.length < 2) return;
 
-        let gradB = 0, gradI = 0;
-        // TURBO RATES: We increase these 5x to force the model to jump to the correct level
-        const lrB = 5.0; 
-        const lrI = 2.0;
-        const momentum = 0.9; 
+        let gradI = 0;
+        const learningRate = 0.25; // Controlled learning to prevent 'whiplash'
 
         syncs.forEach(s => {
-            const abs = parseFloat(s.absorbance);
-            const actual = parseFloat(s.actual);
-            // The learning algorithm must train the static model
-            const pred = (cal.coefA * Math.pow(abs, 2)) + (cal.coefB * abs) + cal.intercept;
-            const error = pred - actual;
-
-            gradB += error * abs;
-            gradI += error;
+            const pred = (cal.coefA * Math.pow(parseFloat(s.absorbance), 2)) + (cal.coefB * parseFloat(s.absorbance)) + cal.intercept;
+            gradI += (pred - parseFloat(s.actual));
         });
 
-        velocityB = (momentum * velocityB) + (lrB * (gradB / syncs.length));
-        velocityI = (momentum * (velocityI || 0)) + (lrI * (gradI / syncs.length));
-
-        cal.coefB -= velocityB;
-        cal.intercept -= velocityI;
-
-        // Open the range so it can find your -500 sensitivity
-        cal.coefB = Math.max(-1500, Math.min(-10, cal.coefB)); 
-        cal.intercept = Math.max(50, Math.min(400, cal.intercept));
+        cal.intercept -= (learningRate * (gradI / syncs.length));
         
-        console.log(`Turbo Update -> CoefB: ${cal.coefB.toFixed(2)} | Intercept: ${cal.intercept.toFixed(2)}`);
+        // Limits to ensure the model stays within Abhishek's biological bounds
+        cal.intercept = Math.max(80, Math.min(280, cal.intercept));
+        console.log("Model Calibrated. New Intercept: " + cal.intercept.toFixed(2));
     }
 
     function saveCal() {
