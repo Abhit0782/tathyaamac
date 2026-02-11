@@ -1036,54 +1036,56 @@
         el.innerText = msg; el.style.color = color;
     }
 
-    function syncCal() {
+    async function syncCal() {
         const actual = parseFloat(document.getElementById('meterVal').value);
         if(!actual || history.length < 1) return alert("Scan first, then enter meter value.");
         
         const lastScan = history[0];
-        const abs = parseFloat(lastScan.absorbance);
-        
-        // Learning should be based on the static model, not the real-time kinetic adjustment
-        const modelPrediction = (cal.coefA * Math.pow(abs, 2)) + (cal.coefB * abs) + cal.intercept;
-        const newOffset = actual - modelPrediction;
-
-        cal.personalOffset = cal.personalOffset || 0;
-        const weight = 1 / ((cal.syncCount || 0) + 2); 
-        cal.personalOffset = (cal.personalOffset * (1 - weight)) + (newOffset * weight);
-        cal.syncCount = (cal.syncCount || 0) + 1;
-
-        // Update Accuracy
         const predictedVal = parseFloat(lastScan.val);
-        const currentError = Math.abs(predictedVal - actual) / actual;
-        const currentAcc = Math.max(0, 100 - (currentError * 100));
-        const prevCount = cal.syncCount - 1;
-        const currentAvg = cal.finalAccuracyPercent || 0;
-        cal.finalAccuracyPercent = prevCount > 0 ? ((currentAvg * prevCount) + currentAcc) / cal.syncCount : currentAcc;
 
+        // 1. Update local history
         history[0].actual = actual;
         history[0].type = "SYNC";
-        deepLearningOptimization();
-        saveCal();
         localStorage.setItem('tathya_hist_mac', JSON.stringify(history));
         
-        updateUI(); renderLog(); 
-        alert("Hardware Profile Updated!");
+        // 2. Local Accuracy tracking
+        const currentError = Math.abs(predictedVal - actual) / actual;
+        const currentAcc = Math.max(0, 100 - (currentError * 100));
+        cal.syncCount = (cal.syncCount || 0) + 1;
+        const prevCount = cal.syncCount - 1;
+        cal.finalAccuracyPercent = prevCount > 0 ? ((cal.finalAccuracyPercent * prevCount) + currentAcc) / cal.syncCount : currentAcc;
 
-        // Send Sync to Cloud
-        sendToDatabase({
-            name: enrollmentData ? enrollmentData.name : "Anonymous", // ADD THIS LINE
-            type: "SYNC",
-            val: predictedVal,
-            actual: actual,
-            finger: currentFinger,
-            date: new Date().toLocaleDateString(),
-            time: new Date().toLocaleTimeString(),
-            absorbance: abs.toFixed(4),
-            temp: lastScan.temp,
-            coefA: cal.coefA, // Send current coefficients to be logged
-            coefB: cal.coefB,
-            intercept: cal.intercept
+        updateStatus("UPLOADING 5D SYNC...", "#2196f3");
+
+        // 3. Send Sync to Cloud
+        await fetch(GOOGLE_SCRIPT_URL, {
+            method: "POST",
+            mode: "no-cors",
+            body: JSON.stringify({
+                name: enrollmentData.name,
+                type: "SYNC",
+                val: predictedVal,
+                actual: actual,
+                finger: currentFinger,
+                date: new Date().toLocaleDateString(),
+                time: new Date().toLocaleTimeString(),
+                absorbance: lastScan.absorbance,
+                temp: lastScan.temp,
+                coefA: cal.coefA, 
+                coefB: cal.coefB,
+                intercept: cal.intercept,
+                velocity: lastScan.velocity,
+                vascularRatio: lastScan.vascularRatio,
+                confidence: lastScan.confidence
+            })
         });
+
+        // 4. THE "SMART" FIX: Fetch the updated Slope (CoefB) and Intercept from the cloud
+        // This allows the Cloud's 5D logic to become the Master.
+        await reviveFromCloud(enrollmentData.name, false);
+        
+        updateUI(); renderLog(); 
+        alert("Extreme Smart Sync Complete! Slope & Intercept Updated.");
     }
 
     function optimizeCoefficients() {
