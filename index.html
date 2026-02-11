@@ -804,11 +804,12 @@
             if (timeDelta > 0.1) { // Only calculate if there's a meaningful time gap
                 velocity = (currentAbs - lastKineticState.abs) / timeDelta;
                 
-                // This gain anticipates where the glucose is heading based on absorbance velocity
-                const sensitivityMultiplier = 150; 
-                const kineticAdjustment = velocity * sensitivityMultiplier;
-                finalVal += kineticAdjustment;
-                slope = kineticAdjustment; // Use adjustment magnitude for status
+                // This gain anticipates where the glucose is heading. Increased to match
+                // high-velocity metabolism and overpower the static model's "anchor".
+                const kineticGain = -15000; 
+                const anticipatedShift = velocity * kineticGain;
+                finalVal += anticipatedShift;
+                slope = anticipatedShift; // Use adjustment magnitude for status
             }
         }
 
