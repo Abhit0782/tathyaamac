@@ -776,6 +776,12 @@
         return { score: Math.min(score, 100), vascularRatio: vascularRatio };
     }
 
+    function getStandardDeviation(array) {
+        const n = array.length;
+        const mean = array.reduce((a, b) => a + b) / n;
+        return Math.sqrt(array.map(x => Math.pow(x - mean, 2)).reduce((a, b) => a + b) / n);
+    }
+
     function finishAnalysisRecursive(baseline) {
         sendCommand("STOP"); // Tell ESP32 to stop sending data
         clearInterval(confidenceTimer);
@@ -811,50 +817,41 @@
         }
         lastKineticState = { abs: abs, time: now, velocity: velocity };
 
-        // --- SUPERSMART AUTONOMOUS FILTERING ---
+        // --- 5D HYBRID MATRIX UPGRADE ---
 
-        // 1. AUC (Area Under Curve) Density Analysis
-        // Analyzes the "thickness" of the blood pulse to verify sugar levels.
-        let ppgValues = buffer.map(b => b.r);
-        let meanPPG = ppgValues.reduce((a,b) => a+b, 0) / ppgValues.length;
-        let areaUnderCurve = ppgValues.reduce((a,b) => a + Math.abs(b - meanPPG), 0);
-        let opticalDensityFactor = (areaUnderCurve / meanPPG) * 10; 
+        // 1. Photoacoustic Rise-Time (Viscosity Analysis)
+        let riseTimes = topPulses.map(p => {
+            let wave = p.segment.map(s => s.r);
+            let peakIdx = wave.indexOf(Math.max(...wave));
+            return peakIdx * 20; // ms at 50Hz
+        });
+        let avgRiseTime = riseTimes.reduce((a,b)=>a+b,0)/riseTimes.length;
+        let viscosityFactor = (avgRiseTime - 120) * 0.5; // Correction based on wave "sluggishness"
 
-        // 2. Base Prediction Calculation
-        let basePred = (cal.coefA * Math.pow(abs, 2)) + (cal.coefB * abs) + cal.intercept;
+        // 2. Multi-Wavelength Optical Isomer (Scatter Ratio)
+        let redSD = getStandardDeviation(buffer.map(b => b.r));
+        let irSD = getStandardDeviation(buffer.map(b => b.ir));
+        let scatterRatio = (redSD / irSD);
+        let isomerCorrection = (scatterRatio - 1.2) * 15; // Rotational scattering offset
 
-        // 3. Stiffness & Density Hybrid Correction
-        let stiffnessCorrection = 0;
-        let vascularRatio = topPulses[0].vascularRatio || 45;
-        if (vascularRatio < 40) {
-            stiffnessCorrection = (40 - vascularRatio) * 0.8; 
-        }
-        // Add density factor: Sugary blood is "denser" and changes the pulse shape.
-        let densityAdjustment = (opticalDensityFactor - 5) * 2; 
-        
-        let rawPred = basePred - stiffnessCorrection + densityAdjustment + (cal.personalOffset || 0);
+        // 3. Thermal Gradient Compensation
+        let currentTemp = sensorData.t || 30; // Celsius
+        let thermalOffset = (currentTemp - 36.5) * 3.7; // 3.7mg/dL per degree Celsius
 
-        // 4. KALMAN FILTER (Autonomous Stability)
-        // Prevents the result from jumping 70 points unless the sensor is 100% sure.
+        // 4. Circadian Clock Layer
+        let hour = new Date().getHours();
+        let circadianBias = (hour > 18 || hour < 6) ? 12 : -5; // Evening resistance vs Morning sensitivity
+
+        // --- COMBINED MASTER PREDICTION ---
+        let base = (cal.coefA * Math.pow(abs, 2)) + (cal.coefB * abs) + cal.intercept;
+        let rawPred = base + viscosityFactor + isomerCorrection - thermalOffset + circadianBias;
+
+        // Autonomous Kalman Stability (as before)
+        let confidence = parseInt(document.getElementById('confPercent').innerText) || 50;
         if (history.length > 0) {
-            let lastVal = history.find(h => h.actual !== "--")?.actual || history[0].val;
-            let timeElapsed = (Date.now() - lastKineticState.time) / 60000;
-            
-            // Calculate trust levels
-            let predictionUncertainty = 15; // Internal model confidence
-            let sensorUncertainty = (100 - (parseInt(document.getElementById('confPercent').innerText) || 50)); 
-            
-            // Kalman Gain: Do we trust the History or the New Scan?
-            let kalmanGain = predictionUncertainty / (predictionUncertainty + sensorUncertainty);
-            
-            // Blend the two states
+            let lastVal = history[0].val;
+            let kalmanGain = 15 / (15 + (100 - confidence));
             rawPred = lastVal + kalmanGain * (rawPred - lastVal);
-            
-            // Final Biological "Speed Limit"
-            let maxBioChange = 4.0 * timeElapsed; // Set to 4.0 for faster post-meal tracking
-            if (Math.abs(rawPred - lastVal) > maxBioChange) {
-                rawPred = lastVal + (Math.sign(rawPred - lastVal) * maxBioChange);
-            }
         }
 
         let finalVal = Math.round(rawPred);
