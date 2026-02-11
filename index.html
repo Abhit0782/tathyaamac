@@ -827,17 +827,14 @@
             rawPred += (tempDelta * cal.tempCoef);
         }
 
-        // PHYSIOLOGICAL GATE: Max change of 3mg/dL per minute
-        if (history.length > 0) {
-            let lastLog = history[0];
-            let timeDiffMin = (Date.now() - lastLog.timestamp) / 60000;
-            let maxChange = 3 * timeDiffMin; 
-            
-            // Clamp the result to biological reality
-            if (Math.abs(rawPred - lastLog.val) > maxChange) {
-                rawPred = lastLog.val + (Math.sign(rawPred - lastLog.val) * maxChange);
-                console.log("AI Safety: Clamped to biological limit.");
-            }
+        // AI Rate Limiter
+        let lastVal = history.length > 0 ? history[0].val : rawPred;
+        let timeElapsed = (Date.now() - lastKineticState.time) / 60000;
+        let maxChange = 2.5 * timeElapsed; // Humans change ~2.5mg/dL per minute max
+
+        if (Math.abs(rawPred - lastVal) > maxChange && history.length > 0) {
+            rawPred = lastVal + (Math.sign(rawPred - lastVal) * maxChange);
+            console.log("AI Safety Gate: Stabilizing result based on bio-limits");
         }
 
         // The new analysis function includes its own safety clamps.
