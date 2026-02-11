@@ -1082,7 +1082,7 @@
             smoothedVelocity = (0.3 * rawVelocity) + (0.7 * smoothedVelocity);
             
             // High-Gain Anticipation (-18000) for fast metabolism tracking
-            const kineticGain = -18000; 
+            const kineticGain = -35000; 
             let kineticShift = smoothedVelocity * kineticGain;
             
             let finalGlucose = staticPred + kineticShift;
@@ -1193,3 +1193,4 @@
 </script>
 </body>
 </html>
+
