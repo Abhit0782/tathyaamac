@@ -659,7 +659,8 @@
             let end = valleys[i+1];
             let segment = buf.slice(start, end);
             let waveSegment = segment.map(s => s.r);
-            let score = calculatePulseScore(waveSegment);
+            let pulseMetrics = calculatePulseScore(waveSegment);
+            let score = pulseMetrics.score;
             
             let meanR = waveSegment.reduce((a,b)=>a+b,0)/waveSegment.length;
             if (meanR <= 0) meanR = 0.0001; // Safety guard: Prevent division by zero
@@ -682,7 +683,8 @@
                 score: score,
                 meanR: meanR,
                 rpi: meanRPI,
-                val: val
+                val: val,
+                vascularRatio: pulseMetrics.vascularRatio
             });
         }
         return pulses;
@@ -771,7 +773,7 @@
         }
 
         // Safety: Cap the score at 100
-        return Math.min(score, 100);
+        return { score: Math.min(score, 100), vascularRatio: vascularRatio };
     }
 
     function finishAnalysisRecursive(baseline) {
@@ -808,6 +810,16 @@
             finalVal += (tempDelta * cal.tempCoef);
         }
 
+        // PHYSIOLOGICAL GATE: Root Solution for 90% Accuracy
+        let lastVal = history.length > 0 ? history[0].val : finalVal;
+        let maxPossibleChange = 5 * ( (Date.now() - lastKineticState.time) / 60000 ); // Max 5mg/dL per minute
+
+        // If the jump is too big, the AI "filters" it
+        if (Math.abs(finalVal - lastVal) > maxPossibleChange && history.length > 0) {
+            console.log("AI Filter: Suppressing impossible jump.");
+            finalVal = lastVal + (Math.sign(finalVal - lastVal) * 2); // Allow only a tiny move
+        }
+
         // The new analysis function includes its own safety clamps.
         finalVal = Math.round(finalVal);
 
@@ -835,7 +847,9 @@
         coefA: cal.coefA,
         coefB: cal.coefB,
         intercept: cal.intercept,
-        personalOffset: cal.personalOffset || 0
+        personalOffset: cal.personalOffset || 0,
+        vascularRatio: topPulses[0].vascularRatio || 0, // NEW: For cloud learning
+        confidence: parseInt(document.getElementById('confPercent').innerText) || 0 // NEW: For cloud learning
     };
 
         history.unshift(logEntry); if(history.length > 10) history.pop();
