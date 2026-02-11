@@ -1059,14 +1059,15 @@
     }
 
     function deepLearningOptimization() {
-        console.log("--- Fine-Tuning Precision Phase ---");
-        const syncs = history.filter(h => h.type === "SYNC" && h.actual !== "--").slice(0, 15);
+        console.log("--- Full-Range Adaptive Sync ---");
+        const syncs = history.filter(h => h.type === "SYNC" && h.actual !== "--").slice(0, 20);
         if (syncs.length < 3) return;
 
-        let gradI = 0;
-        // Lower learning rate (0.1) prevents 'overshooting' and fixes the 20mg/dL lag
-        const learningRate = 0.1; 
-        const momentum = 0.9; // High momentum keeps the model stable during pressure changes
+        let gradB = 0, gradI = 0;
+        // We increase the learning rate slightly to break the 135 floor
+        const lrB = 0.8; 
+        const lrI = 0.3;
+        const momentum = 0.85;
 
         syncs.forEach(s => {
             const abs = parseFloat(s.absorbance);
@@ -1074,20 +1075,23 @@
             const pred = (cal.coefA * Math.pow(abs, 2)) + (cal.coefB * abs) + cal.intercept;
             const error = pred - actual;
 
-            // Focus exclusively on the Intercept for the final descent to 150
+            gradB += error * abs;
             gradI += error;
         });
 
-        // Update Intercept Velocity
-        velocityI = (momentum * (velocityI || 0)) + (learningRate * (gradI / syncs.length));
+        // Update Velocities
+        velocityB = (momentum * velocityB) + (lrB * (gradB / syncs.length));
+        velocityI = (momentum * (velocityI || 0)) + (lrI * (gradI / syncs.length));
 
-        // Apply the fix to the Intercept only
+        // Apply updates to both to reach the 100mg/dL range
+        cal.coefB -= velocityB;
         cal.intercept -= velocityI;
 
-        // Safety clamps to keep your refined profile secure
-        cal.intercept = Math.max(100, Math.min(300, cal.intercept));
+        // Expand clamps to allow for Abhishek's 100-220 full spectrum
+        cal.coefB = Math.max(-1000, Math.min(-10, cal.coefB)); 
+        cal.intercept = Math.max(80, Math.min(300, cal.intercept));
         
-        console.log(`Precision Lock-In -> Intercept: ${cal.intercept.toFixed(2)} | Slope Fixed at: ${cal.coefB.toFixed(2)}`);
+        console.log(`Adaptive Update -> CoefB: ${cal.coefB.toFixed(2)} | Intercept: ${cal.intercept.toFixed(2)}`);
     }
 
     function saveCal() {
