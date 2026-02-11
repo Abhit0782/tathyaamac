@@ -182,7 +182,7 @@
     </div>
 
 <script>
-    const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz451OOsZfln8ljH5Guj25SU_FLMLX1Jihes3yu0NU5IoK94xB3NytW4ZAFyNDu2kxL/exec".trim(); 
+    const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz451OOsZfln8ljH5Guj25SU_FLMLX1Jihes3yu0NU5IoK94xB3NytW4ZAFyNDu2kxL/exec"; 
 
     const clock = document.getElementById('clockProgress'), pGraph = document.getElementById('pulseGraph'), pCtx = pGraph.getContext('2d');
     const tCanvas = document.getElementById('trendCanvas'), tCtx = tCanvas.getContext('2d');
@@ -245,8 +245,6 @@
     // --- GLOBAL KINETIC MEMORY ---
     let lastKineticState = { abs: 0, time: Date.now(), velocity: 0 };
     let smoothedVelocity = 0;
-    // Dynamically initialized variable to track the last validated glucose
-    let lastValidatedGlucose; 
 
     function init() {
     updateUI(); 
@@ -263,15 +261,18 @@
     // --- DATABASE ENGINE ---
     function sendToDatabase(payload) {
         if (!GOOGLE_SCRIPT_URL) return;
+        const statusEl = document.getElementById('statusMsg');
+        if(statusEl) statusEl.innerText = "SYNCING CLOUD...";
         
-        // We send as plain text to bypass CORS pre-flight restrictions
         fetch(GOOGLE_SCRIPT_URL, {
             method: "POST",
-            headers: { "Content-Type": "text/plain" }, 
+            mode: "no-cors", // Important for GAS
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload)
-        })
-        .then(response => console.log("Cloud Sync Successful"))
-        .catch(e => console.error("Cloud Sync Failed", e));
+        }).then(() => {
+            if(statusEl) { statusEl.innerText = "CLOUD SAVED"; statusEl.style.color = "#00e676"; }
+            setTimeout(() => { if(statusEl) statusEl.innerText = ""; }, 3000);
+        }).catch(e => { console.error(e); if(statusEl) statusEl.innerText = "CLOUD ERROR"; });
     }
 
     async function connectSerial() {
@@ -396,80 +397,92 @@
         const name = document.getElementById('userName').value.trim();
         if(!name) return alert("Please enter your name.");
         
-        // UI Feedback: Block interaction while checking database
-        updateStatus("CHECKING TATHYA CLOUD...", "#2196f3");
-        document.querySelector("#nameSection button").disabled = true;
-
-        // WAIT for the cloud to finish searching for "Abhishek Thakur"
         const isRevived = await reviveFromCloud(name, true);
 
         if (isRevived) {
-            // SUCCESS: The revive function now handles closing the modal and loading data
-            console.log("Database Match Found. Bypassing Finger Scan.");
+            enrollmentData = { name: name, density: "Revived", baseline: cal.bInt };
+            localStorage.setItem('tathya_enroll_mac', JSON.stringify(enrollmentData));
+            document.getElementById('enrollModal').classList.remove('visible');
         } else {
-            // FAIL: No data found, proceed to calibration
+            // Pre-Scan Calibration: Ambient Light Check
+            if (isConnected) {
+                sendCommand("START");
+                await new Promise(r => setTimeout(r, 500));
+                if (sensorData.ir > 20000) { sendCommand("STOP"); alert("Sensor obstructed. Please remove finger."); return; }
+                sendCommand("STOP");
+            }
+
             document.getElementById('nameSection').style.display = "none";
             document.getElementById('fingerSection').style.display = "flex";
             document.getElementById('fingerSection').style.flexDirection = "column";
             document.getElementById('fingerSection').style.alignItems = "center";
-            updateStatus("NEW USER DETECTED", "#00e676");
         }
-        document.querySelector("#nameSection button").disabled = false;
     }
 
   async function reviveFromCloud(name, showAlert) {
     try {
-        console.log("Attempting to revive: " + name);
         const resp = await fetch(GOOGLE_SCRIPT_URL, { 
             method: 'POST', 
-            headers: { "Content-Type": "text/plain;charset=utf-8" },
+            headers: { "Content-Type": "text/plain" },
             redirect: "follow",
             body: JSON.stringify({type: "REVIVE_REQUEST", name: name}) 
         });
         const cloudData = await resp.json();
-        console.log("Cloud Response:", cloudData);
         
-        // FIX: Check for explicit userFound flag OR historical data (timestamp/baseline).
-        // We removed 'cloudData.coefA' because it is present by default for new users too.
-        const isKnownUser = cloudData.userFound === true || 
-                            cloudData.lastTimestamp > 0 || 
-                            parseInt(cloudData.syncCount) > 0 || 
-                            parseFloat(cloudData.lastBaseline) > 0;
-
-        if (cloudData && isKnownUser) {
-            // 1. Restore Calibration
-            cal.coefA = parseFloat(cloudData.coefA) || defaultCal.coefA;
-            cal.coefB = parseFloat(cloudData.coefB) || defaultCal.coefB;
-            cal.intercept = parseFloat(cloudData.intercept) || defaultCal.intercept;
+        // If the cloud returns a record with history
+        if (cloudData && (cloudData.syncCount > 0 || cloudData.lastBaseline > 0)) {
+            // Force the global calibration object to use cloud values
+            cal.personalOffset = parseFloat(cloudData.personalOffset) || 0; // This is now calculated in cloud
+            cal.intercept = parseFloat(cloudData.intercept) || defaultCal.intercept; // Use defaultCal.intercept as fallback
+            cal.syncCount = parseInt(cloudData.syncCount) || 0; // This is now calculated in cloud
             cal.bInt = parseFloat(cloudData.lastBaseline) || 120000;
+            // 1. Update the Calibration Object with Cloud Learning
+            cal.coefA = cloudData.coefA;
+            cal.coefB = cloudData.coefB;
+                       
+            // 2. Fix the 0% Accuracy Bug
             cal.finalAccuracyPercent = cloudData.accuracy || 0;
-            cal.syncCount = parseInt(cloudData.syncCount) || 0;
-            cal.personalOffset = parseFloat(cloudData.personalOffset) || 0;
+            
+            if (cloudData.lastBaseline > 0) {
+            cal.bInt = cloudData.lastBaseline; // Force hardware baseline restoration
+            console.log("Hardware Baseline Restored: " + cal.bInt);
+            }
+            cal.personalOffset = cloudData.personalOffset || 0; // Apply learned offset
+            // 3. Prevent the "Enrolment Loop" by restoring the hardware baseline
+            if (cloudData.lastBaseline > 0) {
+                cal.bInt = cloudData.lastBaseline;
+                // Update local enrollment state so it doesn't prompt for a new scan
+                enrollmentData = { 
+                    name: name, 
+                    baseline: cloudData.lastBaseline, 
+                    type: "CLOUD_REVIVED" 
+                };
+                localStorage.setItem('tathya_enroll_mac', JSON.stringify(enrollmentData));
+            }
 
-            // 2. Fix the NaN: Force initialize the Stability Shield
-            lastValidatedGlucose = parseFloat(cloudData.lastVal) || 150;
-            
-            // 3. KILL THE ENROLLMENT MODAL & SAVE STATE
-            enrollmentData = { 
-                name: name, 
-                baseline: cal.bInt, 
-                type: "CLOUD_REVIVED" 
-            };
-            localStorage.setItem('tathya_enroll_mac', JSON.stringify(enrollmentData));
-            
-            // UI Cleanup
-            document.getElementById('enrollModal').classList.remove('visible');
+            // NEW: Restore the last known kinetic state from the cloud
+            if (cloudData.lastTimestamp && cloudData.lastAbsorbance) {
+                lastKineticState = {
+                    time: cloudData.lastTimestamp,
+                    abs: parseFloat(cloudData.lastAbsorbance)
+                };
+                console.log("Kinetic state restored from cloud:", lastKineticState);
+            }
+
+            // 4. Save to local storage and refresh the Dashboard UI
+            cal = sanitizeCal(cal);
             saveCal();
             updateUI();
             
-            if (showAlert) alert("Tathya Memory Revived: " + name);
+            if (showAlert) {
+                alert("Tathya Memory Revived: " + name + " (Level " + cal.syncCount + ")");
+            }
+            console.log("Cloud Data Applied. Current Accuracy: " + cal.finalAccuracyPercent.toFixed(1) + "%");
             return true;
         }
-        console.warn("User found but no data to revive.");
         return false;
     } catch(e) { 
-        console.error("Revive Error:", e);
-        if (showAlert) alert("Cloud Connection Failed: " + e.message + "\nCheck internet or script URL.");
+        console.error("Revive Error:", e); 
         return false; 
     }
 }
@@ -532,11 +545,6 @@
     function runAnalysis() {
         if(!isConnected) return alert("Hardware not connected.");
         
-        // FIX: If the Shield isn't primed yet, set it to the cloud value or 150
-        if (isNaN(lastValidatedGlucose) || !lastValidatedGlucose) {
-            lastValidatedGlucose = (enrollmentData && enrollmentData.lastVal) || 150;
-        }
-
         sendCommand("START"); // Tell ESP32 to start sending data
         document.getElementById('scanBtn').disabled = true;
         // document.getElementById('debugOverlay').style.display = 'block'; // No longer needed as it's a permanent card
@@ -786,7 +794,7 @@
         let topPulses = pulses.slice(0, topCount);
 
         // --- MASTER ANALYSIS ENGINE CALL ---
-        let finalVal = analyzeWithStabilityShield(baseline, topPulses[0].meanR);
+        let finalVal = analyzeGlucoseIndependent(baseline, topPulses[0].meanR);
         let velocity = lastKineticState.velocity; // For logging
         let slope = 0; // Keep slope for status message
         // The new function logs the kinetic shift internally and applies safety clamps.
@@ -1051,48 +1059,40 @@
     }
 
     /**
-     * Hardened Independent Logic with Stability Shield
+     * MASTER ANALYSIS ENGINE
+     * Tackles 100mg/dL lows to 250+ mg/dL spikes autonomously.
      */
-    function analyzeWithStabilityShield(baseline, currentR) {
+    function analyzeGlucoseIndependent(baseline, currentR) {
+        const now = Date.now();
         let currentAbs = Math.log(baseline / currentR);
         
-        // Safety check: If lastValidatedGlucose is somehow still NaN, 
-        // we fallback to the static prediction to 're-prime' the shield.
-        if (isNaN(lastValidatedGlucose) || lastValidatedGlucose === undefined) {
-            lastValidatedGlucose = (cal.coefA * Math.pow(currentAbs, 2)) + (cal.coefB * currentAbs) + cal.intercept;
-        }
-
+        // 1. STATIC BASELINE (The 'Anchor')
         let staticPred = (cal.coefA * Math.pow(currentAbs, 2)) + (cal.coefB * currentAbs) + cal.intercept;
 
-        let timeNow = Date.now();
-        let timeDelta = (timeNow - lastKineticState.time) / 60000;
-        if (timeDelta < 0.1 || timeDelta > 60) timeDelta = 1.0; 
+        // 2. KINETIC TREND ENGINE (The 'Root Cause' Fix)
+        let timeDelta = (now - lastKineticState.time) / 60000; // minutes
+        if (timeDelta > 0.5) {
+            let rawVelocity = (currentAbs - lastKineticState.abs) / timeDelta;
+            
+            // Damping Filter (0.7) prevents sensor noise from causing 'fake' spikes
+            smoothedVelocity = (0.3 * rawVelocity) + (0.7 * smoothedVelocity);
+            
+            // High-Gain Anticipation (-18000) for fast metabolism tracking
+            const kineticGain = -18000; 
+            let kineticShift = smoothedVelocity * kineticGain;
+            
+            let finalGlucose = staticPred + kineticShift;
 
-        let rawVelocity = (currentAbs - lastKineticState.abs) / timeDelta;
-        
-        // We reduce damping to 0.6 so it catches the 200+ spikes faster
-        smoothedVelocity = (0.4 * rawVelocity) + (0.6 * smoothedVelocity);
-        
-        // Kinetic Gain tuned for 250+ tracking
-        let kineticAdjustment = smoothedVelocity * -35000;
-        let rawFinal = staticPred + kineticAdjustment;
+            // 3. RANGE SAFETY CLAMPS (70 to 350 mg/dL)
+            finalGlucose = Math.max(70, Math.min(350, finalGlucose));
 
-        // Stability Shield: Allows a 4.0 mg/dL per minute climb (Spike Speed)
-        let maxChange = timeDelta * 4.0; 
-        let changeRequest = rawFinal - lastValidatedGlucose;
-        
-        let validatedChange = Math.max(-maxChange, Math.min(maxChange, changeRequest));
-        let finalGlucose = lastValidatedGlucose + validatedChange;
-
-        // Memory Update
-        lastValidatedGlucose = finalGlucose;
-        lastKineticState = { 
-            abs: currentAbs, 
-            time: timeNow, 
-            velocity: smoothedVelocity 
-        };
-
-        return Math.max(70, Math.min(350, finalGlucose));
+            // Update Memory
+            lastKineticState = { abs: currentAbs, time: now, velocity: smoothedVelocity };
+            
+            console.log(`Trend: ${smoothedVelocity > 0 ? "Rising" : "Falling"} | Kinetic Shift: ${kineticShift.toFixed(1)}`);
+            return finalGlucose;
+        }
+        return staticPred;
     }
 
     /**
