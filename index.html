@@ -242,6 +242,7 @@
     let velocityA = 0;
     let velocityB = 0;
     let velocityI = 0;
+    let lastKineticState = { time: 0, abs: 0 };
 
     function init() {
     updateUI(); 
@@ -457,6 +458,15 @@
                 localStorage.setItem('tathya_enroll_mac', JSON.stringify(enrollmentData));
             }
 
+            // NEW: Restore the last known kinetic state from the cloud
+            if (cloudData.lastTimestamp && cloudData.lastAbsorbance) {
+                lastKineticState = {
+                    time: cloudData.lastTimestamp,
+                    abs: parseFloat(cloudData.lastAbsorbance)
+                };
+                console.log("Kinetic state restored from cloud:", lastKineticState);
+            }
+
             // 4. Save to local storage and refresh the Dashboard UI
             cal = sanitizeCal(cal);
             saveCal();
@@ -662,7 +672,7 @@
                 document.getElementById('dbgAbs').innerText = abs.toFixed(4);
             }
 
-            // Ensure this specific line includes the personalOffset
+            // This now calculates a STATIC value. The kinetic part is applied once at the end.
             let val = (cal.coefA * Math.pow(abs, 2)) + (cal.coefB * abs) + cal.intercept + (cal.personalOffset || 0);
             
             pulses.push({
@@ -777,21 +787,34 @@
         // Sort by Score
         pulses.sort((a,b) => b.score - a.score);
         
-        // Top 20%
+        // Top 20% of pulses
         let topCount = Math.max(3, Math.ceil(pulses.length * 0.2));
         let topPulses = pulses.slice(0, topCount);
 
-        // 4. Zero-Pressure Intercept Logic
-        let zpResult = calculateZeroPressureResult(pulses);
-        let zpVal = zpResult ? zpResult.val : topPulses[0].val;
-        let slope = zpResult ? zpResult.slope : 0;
+        // --- TEMPORAL MEMORY LOGIC ---
+        const currentAbs = Math.log(baseline / topPulses[0].meanR);
+        // 1. Calculate the static prediction from the model
+        let finalVal = (cal.coefA * Math.pow(currentAbs, 2)) + (cal.coefB * currentAbs) + cal.intercept;
+        let velocity = 0;
+        let slope = 0; // Keep slope for status message
         
-        // 2. Top Pulses Average
-        let topVals = topPulses.map(p => p.val);
-        let topAvg = topVals.reduce((a,b)=>a+b,0)/topVals.length;
-        
-        // 3. Weighted Result (70% Top Pulses, 30% ZP Intercept)
-        let finalVal = (topAvg * 0.7) + (zpVal * 0.3);
+        // 2. If a previous state exists, calculate and apply the kinetic adjustment
+        if (lastKineticState.time > 0) {
+            const timeDelta = (Date.now() - lastKineticState.time) / 60000; // minutes
+            if (timeDelta > 0.1) { // Only calculate if there's a meaningful time gap
+                velocity = (currentAbs - lastKineticState.abs) / timeDelta;
+                
+                // This gain anticipates where the glucose is heading based on absorbance velocity
+                const sensitivityMultiplier = 150; 
+                const kineticAdjustment = velocity * sensitivityMultiplier;
+                finalVal += kineticAdjustment;
+                slope = kineticAdjustment; // Use adjustment magnitude for status
+            }
+        }
+
+        // 3. Update the kinetic state for the next scan in this session
+        lastKineticState = { time: Date.now(), abs: currentAbs };
+        // --- END TEMPORAL LOGIC ---
         
         // Thermal Compensation
         if (buffer.length > 0) {
@@ -822,6 +845,7 @@
         
        const logEntry = { 
         name: enrollmentData ? enrollmentData.name : "Anonymous", // ADD THIS LINE
+        timestamp: Date.now(),
         date: new Date().toLocaleDateString(), 
         time: new Date().toLocaleTimeString(), 
         val: finalVal, 
@@ -832,6 +856,7 @@
         absorbance: Math.log(baseline/topPulses[0].meanR).toFixed(4),
         noise: "0.00",
         temp: sensorData.t || 0,
+        velocity: velocity, // The 'Root Cause' fix
         // CRITICAL: Send the actual learned coefficients to the cloud
         coefA: cal.coefA,
         coefB: cal.coefB,
@@ -986,6 +1011,7 @@
         const lastScan = history[0];
         const abs = parseFloat(lastScan.absorbance);
         
+        // Learning should be based on the static model, not the real-time kinetic adjustment
         const modelPrediction = (cal.coefA * Math.pow(abs, 2)) + (cal.coefB * abs) + cal.intercept;
         const newOffset = actual - modelPrediction;
 
@@ -1072,6 +1098,7 @@
         syncs.forEach(s => {
             const abs = parseFloat(s.absorbance);
             const actual = parseFloat(s.actual);
+            // The learning algorithm must train the static model
             const pred = (cal.coefA * Math.pow(abs, 2)) + (cal.coefB * abs) + cal.intercept;
             const error = pred - actual;
 
