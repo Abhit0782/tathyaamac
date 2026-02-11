@@ -1059,38 +1059,37 @@
     }
 
     function deepLearningOptimization() {
-        console.log("--- High-Sensitivity Slope Discovery ---");
-        const syncs = history.filter(h => h.type === "SYNC" && h.actual !== "--").slice(0, 15);
+        console.log("--- Global Profile Discovery ---");
+        const syncs = history.filter(h => h.type === "SYNC" && h.actual !== "--").slice(0, 20);
         if (syncs.length < 3) return;
 
-        let gradB = 0;
-        const learningRateB = 1.5; // Aggressive rate to break the 170-180 floor
-        const momentum = 0.85;
+        let gradB = 0, gradI = 0;
+        const learningRate = 1.2; // High learning rate for rapid adaptation
+        const momentum = 0.8;
 
         syncs.forEach(s => {
             const abs = parseFloat(s.absorbance);
             const actual = parseFloat(s.actual);
-            
-            // Prediction using the locked intercept
-            const pred = (cal.coefA * Math.pow(abs, 2)) + (cal.coefB * abs) + cal.intercept + (cal.personalOffset || 0);
+            const pred = (cal.coefA * Math.pow(abs, 2)) + (cal.coefB * abs) + cal.intercept;
             const error = pred - actual;
 
-            // Force all learning into the Slope (B)
             gradB += error * abs;
+            gradI += error; // Intercept Gradient
         });
 
-        gradB /= syncs.length;
+        // Update Velocity
+        velocityB = (momentum * velocityB) + (learningRate * (gradB / syncs.length));
+        velocityI = (momentum * (velocityI || 0)) + (learningRate * (gradI / syncs.length));
 
-        // Build momentum only for the slope
-        velocityB = (momentum * velocityB) + (learningRateB * gradB);
-
-        // Update the slope
+        // UNLOCK: Apply updates to both Slope and Intercept
         cal.coefB -= velocityB;
+        cal.intercept -= velocityI;
 
-        // Allow the slope to expand significantly to cover 100-point swings
-        cal.coefB = Math.max(-1200, Math.min(-10, cal.coefB)); 
-        
-        console.log(`Slope Optimized -> CoefB: ${cal.coefB.toFixed(2)} | Intercept Locked: ${cal.intercept.toFixed(2)}`);
+        // EXPAND CLAMPS: Allow CoefB to reach the -2500 level needed for your biology
+        cal.coefB = Math.max(-3500, Math.min(-10, cal.coefB)); 
+        cal.intercept = Math.max(50, Math.min(600, cal.intercept));
+    
+        console.log(`Dynamic Lock-In -> CoefB: ${cal.coefB.toFixed(2)} | Intercept: ${cal.intercept.toFixed(2)}`);
     }
 
     function saveCal() {
