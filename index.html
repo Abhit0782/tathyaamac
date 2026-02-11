@@ -1059,15 +1059,15 @@
     }
 
     function deepLearningOptimization() {
-        console.log("--- Full-Range Adaptive Sync ---");
-        const syncs = history.filter(h => h.type === "SYNC" && h.actual !== "--").slice(0, 20);
-        if (syncs.length < 3) return;
+        console.log("--- High-Velocity Range Alignment ---");
+        const syncs = history.filter(h => h.type === "SYNC" && h.actual !== "--").slice(0, 10);
+        if (syncs.length < 2) return;
 
         let gradB = 0, gradI = 0;
-        // We increase the learning rate slightly to break the 135 floor
-        const lrB = 0.8; 
-        const lrI = 0.3;
-        const momentum = 0.85;
+        // TURBO RATES: We increase these 5x to force the model to jump to the correct level
+        const lrB = 5.0; 
+        const lrI = 2.0;
+        const momentum = 0.9; 
 
         syncs.forEach(s => {
             const abs = parseFloat(s.absorbance);
@@ -1079,19 +1079,17 @@
             gradI += error;
         });
 
-        // Update Velocities
         velocityB = (momentum * velocityB) + (lrB * (gradB / syncs.length));
         velocityI = (momentum * (velocityI || 0)) + (lrI * (gradI / syncs.length));
 
-        // Apply updates to both to reach the 100mg/dL range
         cal.coefB -= velocityB;
         cal.intercept -= velocityI;
 
-        // Expand clamps to allow for Abhishek's 100-220 full spectrum
-        cal.coefB = Math.max(-1000, Math.min(-10, cal.coefB)); 
-        cal.intercept = Math.max(80, Math.min(300, cal.intercept));
+        // Open the range so it can find your -500 sensitivity
+        cal.coefB = Math.max(-1500, Math.min(-10, cal.coefB)); 
+        cal.intercept = Math.max(50, Math.min(400, cal.intercept));
         
-        console.log(`Adaptive Update -> CoefB: ${cal.coefB.toFixed(2)} | Intercept: ${cal.intercept.toFixed(2)}`);
+        console.log(`Turbo Update -> CoefB: ${cal.coefB.toFixed(2)} | Intercept: ${cal.intercept.toFixed(2)}`);
     }
 
     function saveCal() {
