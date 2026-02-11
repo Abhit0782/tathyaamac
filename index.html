@@ -399,30 +399,28 @@
         const name = document.getElementById('userName').value.trim();
         if(!name) return alert("Please enter your name.");
         
+        // UI Feedback so you know it's checking the database
+        updateStatus("CHECKING DATABASE...", "#2196f3");
+
+        // CRITICAL FIX: We must 'await' the result so the code doesn't skip ahead
         const isRevived = await reviveFromCloud(name, true);
 
         if (isRevived) {
-            enrollmentData = { name: name, density: "Revived", baseline: cal.bInt };
-            localStorage.setItem('tathya_enroll_mac', JSON.stringify(enrollmentData));
-            document.getElementById('enrollModal').classList.remove('visible');
+            // User exists! The reviveFromCloud function now closes the modal automatically.
+            console.log("User verified. Bypassing finger scan.");
         } else {
-            // Pre-Scan Calibration: Ambient Light Check
-            if (isConnected) {
-                sendCommand("START");
-                await new Promise(r => setTimeout(r, 500));
-                if (sensorData.ir > 20000) { sendCommand("STOP"); alert("Sensor obstructed. Please remove finger."); return; }
-                sendCommand("STOP");
-            }
-
+            // New user or no data found: Proceed to finger calibration
             document.getElementById('nameSection').style.display = "none";
             document.getElementById('fingerSection').style.display = "flex";
             document.getElementById('fingerSection').style.flexDirection = "column";
             document.getElementById('fingerSection').style.alignItems = "center";
+            updateStatus("NEW USER: CALIBRATION REQUIRED", "#00e676");
         }
     }
 
   async function reviveFromCloud(name, showAlert) {
     try {
+        console.log("Attempting to revive: " + name);
         const resp = await fetch(GOOGLE_SCRIPT_URL, { 
             method: 'POST', 
             headers: { "Content-Type": "text/plain" },
@@ -430,9 +428,10 @@
             body: JSON.stringify({type: "REVIVE_REQUEST", name: name}) 
         });
         const cloudData = await resp.json();
+        console.log("Cloud Response:", cloudData);
         
-        // If the cloud returns a record with history
-        if (cloudData && (cloudData.syncCount > 0 || cloudData.lastBaseline > 0)) {
+        // Relaxed Check: If we have ANY valid learning data (Syncs, Baseline, OR Coefficients)
+        if (cloudData && (parseInt(cloudData.syncCount) > 0 || parseFloat(cloudData.lastBaseline) > 0 || cloudData.coefA)) {
             // 1. Restore Calibration
             cal.coefA = parseFloat(cloudData.coefA) || defaultCal.coefA;
             cal.coefB = parseFloat(cloudData.coefB) || defaultCal.coefB;
@@ -440,11 +439,12 @@
             cal.bInt = parseFloat(cloudData.lastBaseline) || 120000;
             cal.finalAccuracyPercent = cloudData.accuracy || 0;
             cal.syncCount = parseInt(cloudData.syncCount) || 0;
+            cal.personalOffset = parseFloat(cloudData.personalOffset) || 0;
 
             // 2. Fix the NaN: Force initialize the Stability Shield
             lastValidatedGlucose = parseFloat(cloudData.lastVal) || 150;
             
-            // 3. KILL THE ENROLLMENT MODAL
+            // 3. KILL THE ENROLLMENT MODAL & SAVE STATE
             enrollmentData = { 
                 name: name, 
                 baseline: cal.bInt, 
@@ -460,8 +460,12 @@
             if (showAlert) alert("Tathya Memory Revived: " + name);
             return true;
         }
+        console.warn("User found but no data to revive.");
         return false;
-    } catch(e) { return false; }
+    } catch(e) { 
+        console.error("Revive Error:", e);
+        return false; 
+    }
 }
     async function startEnrollStep() {
         if(!isConnected) return alert("Sensor not connected.");
@@ -522,6 +526,11 @@
     function runAnalysis() {
         if(!isConnected) return alert("Hardware not connected.");
         
+        // FIX: If the Shield isn't primed yet, set it to the cloud value or 150
+        if (isNaN(lastValidatedGlucose) || !lastValidatedGlucose) {
+            lastValidatedGlucose = (enrollmentData && enrollmentData.lastVal) || 150;
+        }
+
         sendCommand("START"); // Tell ESP32 to start sending data
         document.getElementById('scanBtn').disabled = true;
         // document.getElementById('debugOverlay').style.display = 'block'; // No longer needed as it's a permanent card
