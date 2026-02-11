@@ -263,18 +263,15 @@
     // --- DATABASE ENGINE ---
     function sendToDatabase(payload) {
         if (!GOOGLE_SCRIPT_URL) return;
-        const statusEl = document.getElementById('statusMsg');
-        if(statusEl) statusEl.innerText = "SYNCING CLOUD...";
         
+        // We send as plain text to bypass CORS pre-flight restrictions
         fetch(GOOGLE_SCRIPT_URL, {
             method: "POST",
-            mode: "no-cors", // Important for GAS
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "text/plain" }, 
             body: JSON.stringify(payload)
-        }).then(() => {
-            if(statusEl) { statusEl.innerText = "CLOUD SAVED"; statusEl.style.color = "#00e676"; }
-            setTimeout(() => { if(statusEl) statusEl.innerText = ""; }, 3000);
-        }).catch(e => { console.error(e); if(statusEl) statusEl.innerText = "CLOUD ERROR"; });
+        })
+        .then(response => console.log("Cloud Sync Successful"))
+        .catch(e => console.error("Cloud Sync Failed", e));
     }
 
     async function connectSerial() {
@@ -399,23 +396,25 @@
         const name = document.getElementById('userName').value.trim();
         if(!name) return alert("Please enter your name.");
         
-        // UI Feedback so you know it's checking the database
-        updateStatus("CHECKING DATABASE...", "#2196f3");
+        // UI Feedback: Block interaction while checking database
+        updateStatus("CHECKING TATHYA CLOUD...", "#2196f3");
+        document.querySelector("#nameSection button").disabled = true;
 
-        // CRITICAL FIX: We must 'await' the result so the code doesn't skip ahead
+        // WAIT for the cloud to finish searching for "Abhishek Thakur"
         const isRevived = await reviveFromCloud(name, true);
 
         if (isRevived) {
-            // User exists! The reviveFromCloud function now closes the modal automatically.
-            console.log("User verified. Bypassing finger scan.");
+            // SUCCESS: The revive function now handles closing the modal and loading data
+            console.log("Database Match Found. Bypassing Finger Scan.");
         } else {
-            // New user or no data found: Proceed to finger calibration
+            // FAIL: No data found, proceed to calibration
             document.getElementById('nameSection').style.display = "none";
             document.getElementById('fingerSection').style.display = "flex";
             document.getElementById('fingerSection').style.flexDirection = "column";
             document.getElementById('fingerSection').style.alignItems = "center";
-            updateStatus("NEW USER: CALIBRATION REQUIRED", "#00e676");
+            updateStatus("NEW USER DETECTED", "#00e676");
         }
+        document.querySelector("#nameSection button").disabled = false;
     }
 
   async function reviveFromCloud(name, showAlert) {
@@ -423,7 +422,7 @@
         console.log("Attempting to revive: " + name);
         const resp = await fetch(GOOGLE_SCRIPT_URL, { 
             method: 'POST', 
-            headers: { "Content-Type": "text/plain" },
+            headers: { "Content-Type": "text/plain;charset=utf-8" },
             redirect: "follow",
             body: JSON.stringify({type: "REVIVE_REQUEST", name: name}) 
         });
