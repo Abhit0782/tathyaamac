@@ -430,8 +430,14 @@
         const cloudData = await resp.json();
         console.log("Cloud Response:", cloudData);
         
-        // Relaxed Check: If we have ANY valid learning data (Syncs, Baseline, OR Coefficients)
-        if (cloudData && (parseInt(cloudData.syncCount) > 0 || parseFloat(cloudData.lastBaseline) > 0 || cloudData.coefA)) {
+        // FIX: Check for explicit userFound flag OR historical data (timestamp/baseline).
+        // We removed 'cloudData.coefA' because it is present by default for new users too.
+        const isKnownUser = cloudData.userFound === true || 
+                            cloudData.lastTimestamp > 0 || 
+                            parseInt(cloudData.syncCount) > 0 || 
+                            parseFloat(cloudData.lastBaseline) > 0;
+
+        if (cloudData && isKnownUser) {
             // 1. Restore Calibration
             cal.coefA = parseFloat(cloudData.coefA) || defaultCal.coefA;
             cal.coefB = parseFloat(cloudData.coefB) || defaultCal.coefB;
@@ -464,6 +470,7 @@
         return false;
     } catch(e) { 
         console.error("Revive Error:", e);
+        if (showAlert) alert("Cloud Connection Failed: " + e.message + "\nCheck internet or script URL.");
         return false; 
     }
 }
