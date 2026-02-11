@@ -811,14 +811,20 @@
         }
         lastKineticState = { abs: abs, time: now, velocity: velocity };
 
-        // COMPENSATION LOGIC
-        let vascularRatio = topPulses[0].vascularRatio || 45;
-        let stiffnessFactor = (vascularRatio - 45) * 0.5; // Offset absorbance based on vessel stiffness
-        let correctedAbs = abs - (stiffnessFactor * 0.001);
+        // Calculate the base prediction
+        let basePred = (cal.coefA * Math.pow(abs, 2)) + (cal.coefB * abs) + cal.intercept;
 
-        // AI PREDICTION
-        let rawPred = (cal.coefA * Math.pow(correctedAbs, 2)) + (cal.coefB * correctedAbs) + cal.intercept + (cal.personalOffset || 0);
+        // ROOT FIX: Vascular Offset
+        // If stiffness is high (>45), it usually causes overestimation. 
+        // We subtract an offset to stay accurate.
+        let stiffnessOffset = 0;
+        let vascularRatio = topPulses[0].vascularRatio || 0;
+        if (vascularRatio > 45) {
+            stiffnessOffset = (vascularRatio - 45) * 0.4; 
+        }
         
+        let rawPred = basePred - stiffnessOffset + (cal.personalOffset || 0);
+
         // Thermal Compensation
         if (buffer.length > 0) {
             const startTemp = buffer[0].temp || 0;
