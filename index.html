@@ -243,6 +243,7 @@
     let velocityB = 0;
     let velocityI = 0;
     let lastKineticState = { time: 0, abs: 0 };
+    let smoothedVelocity = 0;
 
     function init() {
     updateUI(); 
@@ -791,31 +792,38 @@
         let topCount = Math.max(3, Math.ceil(pulses.length * 0.2));
         let topPulses = pulses.slice(0, topCount);
 
-        // --- TEMPORAL MEMORY LOGIC ---
+        // --- STABILIZED KINETIC ENGINE ---
         const currentAbs = Math.log(baseline / topPulses[0].meanR);
-        // 1. Calculate the static prediction from the model
+        const now = Date.now();
+        
+        // 1. Calculate static base prediction
         let finalVal = (cal.coefA * Math.pow(currentAbs, 2)) + (cal.coefB * currentAbs) + cal.intercept;
         let velocity = 0;
         let slope = 0; // Keep slope for status message
         
-        // 2. If a previous state exists, calculate and apply the kinetic adjustment
+        // 2. Apply Damped Kinetic Adjustment if possible
         if (lastKineticState.time > 0) {
-            const timeDelta = (Date.now() - lastKineticState.time) / 60000; // minutes
+            const timeDelta = (now - lastKineticState.time) / 60000; // minutes
             if (timeDelta > 0.1) { // Only calculate if there's a meaningful time gap
-                velocity = (currentAbs - lastKineticState.abs) / timeDelta;
+                // Calculate Raw Velocity
+                const rawVelocity = (currentAbs - lastKineticState.abs) / timeDelta;
+                velocity = rawVelocity; // For logging
                 
-                // This gain anticipates where the glucose is heading. Increased to match
-                // high-velocity metabolism and overpower the static model's "anchor".
-                const kineticGain = -23000; 
-                const anticipatedShift = velocity * kineticGain;
+                // APPLY DAMPING (EMA): Filter noise, follow trends
+                smoothedVelocity = (0.3 * rawVelocity) + (0.7 * smoothedVelocity);
+
+                // Apply balanced gain to the smoothed trend
+                const kineticGain = -12000; 
+                const anticipatedShift = smoothedVelocity * kineticGain;
+                
                 finalVal += anticipatedShift;
-                slope = anticipatedShift; // Use adjustment magnitude for status
+                slope = anticipatedShift; // For UI status
             }
         }
 
-        // 3. Update the kinetic state for the next scan in this session
-        lastKineticState = { time: Date.now(), abs: currentAbs };
-        // --- END TEMPORAL LOGIC ---
+        // 3. Update kinetic memory for the next scan
+        lastKineticState = { abs: currentAbs, time: now };
+        // --- END KINETIC ENGINE ---
         
         // Thermal Compensation
         if (buffer.length > 0) {
@@ -828,11 +836,11 @@
         // Safety Clamp
         finalVal = Math.round(finalVal);
         let warningMsg = "";
-        if (finalVal < 50) {
-            finalVal = 50;   // Physiological Min
+        if (finalVal < 75) {
+            finalVal = 75;   // Physiological Min
             warningMsg = " (LOW SIGNAL)";
         }
-        if (finalVal > 500) finalVal = 500; // Physiological Max
+        if (finalVal > 350) finalVal = 350; // Physiological Max
 
         document.getElementById('scanBtn').innerText = "START SENSOR SCAN";
         document.getElementById('gluResult').innerText = finalVal;
@@ -1191,4 +1199,3 @@
 </script>
 </body>
 </html>
-
