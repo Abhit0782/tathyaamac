@@ -245,6 +245,8 @@
     // --- GLOBAL KINETIC MEMORY ---
     let lastKineticState = { abs: 0, time: Date.now(), velocity: 0 };
     let smoothedVelocity = 0;
+    // Dynamically initialized variable to track the last validated glucose
+    let lastValidatedGlucose; 
 
     function init() {
     updateUI(); 
@@ -443,6 +445,11 @@
             // 2. Fix the 0% Accuracy Bug
             cal.finalAccuracyPercent = cloudData.accuracy || 0;
             
+            // DYNAMIC INITIALIZATION: Prime the Stability Shield with the last known good state.
+            // If cloud has a lastVal (e.g. your 201), use it. Otherwise, fallback to a safe middle-ground.
+            lastValidatedGlucose = parseFloat(cloudData.lastVal) || 150;
+            console.log("Stability Shield Initialized at: " + lastValidatedGlucose);
+
             if (cloudData.lastBaseline > 0) {
             cal.bInt = cloudData.lastBaseline; // Force hardware baseline restoration
             console.log("Hardware Baseline Restored: " + cal.bInt);
@@ -798,7 +805,7 @@
         let topPulses = pulses.slice(0, topCount);
 
         // --- MASTER ANALYSIS ENGINE CALL ---
-        let finalVal = analyzeGlucoseIndependent(baseline, topPulses[0].meanR);
+        let finalVal = analyzeWithStabilityShield(baseline, topPulses[0].meanR);
         let velocity = lastKineticState.velocity; // For logging
         let slope = 0; // Keep slope for status message
         // The new function logs the kinetic shift internally and applies safety clamps.
@@ -1063,40 +1070,35 @@
     }
 
     /**
-     * MASTER ANALYSIS ENGINE
-     * Tackles 100mg/dL lows to 250+ mg/dL spikes autonomously.
+     * Hardened Independent Logic with Stability Shield
      */
-    function analyzeGlucoseIndependent(baseline, currentR) {
-        const now = Date.now();
+    function analyzeWithStabilityShield(baseline, currentR) {
         let currentAbs = Math.log(baseline / currentR);
-        
-        // 1. STATIC BASELINE (The 'Anchor')
         let staticPred = (cal.coefA * Math.pow(currentAbs, 2)) + (cal.coefB * currentAbs) + cal.intercept;
 
-        // 2. KINETIC TREND ENGINE (The 'Root Cause' Fix)
-        let timeDelta = (now - lastKineticState.time) / 60000; // minutes
-        if (timeDelta > 0.5) {
-            let rawVelocity = (currentAbs - lastKineticState.abs) / timeDelta;
-            
-            // Damping Filter (0.7) prevents sensor noise from causing 'fake' spikes
-            smoothedVelocity = (0.3 * rawVelocity) + (0.7 * smoothedVelocity);
-            
-            // High-Gain Anticipation (-18000) for fast metabolism tracking
-            const kineticGain = -35000; 
-            let kineticShift = smoothedVelocity * kineticGain;
-            
-            let finalGlucose = staticPred + kineticShift;
+        // 1. Calculate the 'Kinetic' move as we did before
+        let timeDelta = (Date.now() - lastKineticState.time) / 60000;
+        let rawVelocity = (currentAbs - lastKineticState.abs) / timeDelta;
+        smoothedVelocity = (0.2 * rawVelocity) + (0.8 * smoothedVelocity);
+        
+        let kineticAdjustment = smoothedVelocity * -35000;
+        let rawFinal = staticPred + kineticAdjustment;
 
-            // 3. RANGE SAFETY CLAMPS (70 to 350 mg/dL)
-            finalGlucose = Math.max(70, Math.min(350, finalGlucose));
+        // 2. THE STABILITY SHIELD (Root Cause Fix)
+        // Glucose rarely moves faster than 3.5mg/dL per minute.
+        // This caps the change to prevent large 'noise' jumps.
+        let maxChange = timeDelta * 3.5; 
+        let changeRequest = rawFinal - lastValidatedGlucose;
+        
+        // Limit the move
+        let validatedChange = Math.max(-maxChange, Math.min(maxChange, changeRequest));
+        let finalGlucose = lastValidatedGlucose + validatedChange;
 
-            // Update Memory
-            lastKineticState = { abs: currentAbs, time: now, velocity: smoothedVelocity };
-            
-            console.log(`Trend: ${smoothedVelocity > 0 ? "Rising" : "Falling"} | Kinetic Shift: ${kineticShift.toFixed(1)}`);
-            return finalGlucose;
-        }
-        return staticPred;
+        // 3. Update Memory
+        lastValidatedGlucose = finalGlucose;
+        lastKineticState = { abs: currentAbs, time: Date.now() };
+
+        return Math.max(70, Math.min(300, finalGlucose));
     }
 
     /**
@@ -1193,4 +1195,3 @@
 </script>
 </body>
 </html>
-
