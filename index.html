@@ -842,15 +842,26 @@
         let hour = new Date().getHours();
         let circadianBias = (hour > 18 || hour < 6) ? 12 : -5; // Evening resistance vs Morning sensitivity
 
-        // --- COMBINED MASTER PREDICTION ---
+        // 1. Calculate the raw physics base
         let base = (cal.coefA * Math.pow(abs, 2)) + (cal.coefB * abs) + cal.intercept;
-        let rawPred = base + viscosityFactor + isomerCorrection - thermalOffset + circadianBias;
+        
+        // 2. Determine Metabolic Phase (Spike vs. Flat)
+        let isSpiking = (smoothedVelocity > 1.2 || (hour > 18 && base > 180)); 
+        let phaseFactor = isSpiking ? 1.4 : 1.0; 
 
-        // Autonomous Kalman Stability (as before)
+        // 3. Apply phase-aware Viscosity and Density adjustments
+        let adjustedViscosity = viscosityFactor * phaseFactor; 
+
+        // 4. FINAL PREDICTION (Consolidated)
+        let rawPred = base + adjustedViscosity + isomerCorrection - thermalOffset + circadianBias;
+
+        // 5. Apply Adaptive Kalman Filter based on the Phase
         let confidence = parseInt(document.getElementById('confPercent').innerText) || 50;
         if (history.length > 0) {
             let lastVal = history[0].val;
-            let kalmanGain = 15 / (15 + (100 - confidence));
+            let pUncertainty = isSpiking ? 30 : 15; // Looser filter to catch the spike peak
+            let sUncertainty = (100 - confidence);
+            let kalmanGain = pUncertainty / (pUncertainty + sUncertainty);
             rawPred = lastVal + kalmanGain * (rawPred - lastVal);
         }
 
