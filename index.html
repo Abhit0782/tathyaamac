@@ -811,8 +811,13 @@
         }
         lastKineticState = { abs: abs, time: now, velocity: velocity };
 
+        // COMPENSATION LOGIC
+        let vascularRatio = topPulses[0].vascularRatio || 45;
+        let stiffnessFactor = (vascularRatio - 45) * 0.5; // Offset absorbance based on vessel stiffness
+        let correctedAbs = abs - (stiffnessFactor * 0.001);
+
         // AI PREDICTION
-        let rawPred = (cal.coefA * Math.pow(abs, 2)) + (cal.coefB * abs) + cal.intercept + (cal.personalOffset || 0);
+        let rawPred = (cal.coefA * Math.pow(correctedAbs, 2)) + (cal.coefB * correctedAbs) + cal.intercept + (cal.personalOffset || 0);
         
         // Thermal Compensation
         if (buffer.length > 0) {
