@@ -1059,13 +1059,14 @@
     }
 
     function deepLearningOptimization() {
-        console.log("--- Global Profile Discovery ---");
-        const syncs = history.filter(h => h.type === "SYNC" && h.actual !== "--").slice(0, 20);
+        console.log("--- Fine-Tuning Precision Phase ---");
+        const syncs = history.filter(h => h.type === "SYNC" && h.actual !== "--").slice(0, 15);
         if (syncs.length < 3) return;
 
-        let gradB = 0, gradI = 0;
-        const learningRate = 1.2; // High learning rate for rapid adaptation
-        const momentum = 0.8;
+        let gradI = 0;
+        // Lower learning rate (0.1) prevents 'overshooting' and fixes the 20mg/dL lag
+        const learningRate = 0.1; 
+        const momentum = 0.9; // High momentum keeps the model stable during pressure changes
 
         syncs.forEach(s => {
             const abs = parseFloat(s.absorbance);
@@ -1073,23 +1074,20 @@
             const pred = (cal.coefA * Math.pow(abs, 2)) + (cal.coefB * abs) + cal.intercept;
             const error = pred - actual;
 
-            gradB += error * abs;
-            gradI += error; // Intercept Gradient
+            // Focus exclusively on the Intercept for the final descent to 150
+            gradI += error;
         });
 
-        // Update Velocity
-        velocityB = (momentum * velocityB) + (learningRate * (gradB / syncs.length));
+        // Update Intercept Velocity
         velocityI = (momentum * (velocityI || 0)) + (learningRate * (gradI / syncs.length));
 
-        // UNLOCK: Apply updates to both Slope and Intercept
-        cal.coefB -= velocityB;
+        // Apply the fix to the Intercept only
         cal.intercept -= velocityI;
 
-        // EXPAND CLAMPS: Allow CoefB to reach the -2500 level needed for your biology
-        cal.coefB = Math.max(-3500, Math.min(-10, cal.coefB)); 
-        cal.intercept = Math.max(50, Math.min(600, cal.intercept));
-    
-        console.log(`Dynamic Lock-In -> CoefB: ${cal.coefB.toFixed(2)} | Intercept: ${cal.intercept.toFixed(2)}`);
+        // Safety clamps to keep your refined profile secure
+        cal.intercept = Math.max(100, Math.min(300, cal.intercept));
+        
+        console.log(`Precision Lock-In -> Intercept: ${cal.intercept.toFixed(2)} | Slope Fixed at: ${cal.coefB.toFixed(2)}`);
     }
 
     function saveCal() {
