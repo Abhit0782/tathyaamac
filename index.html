@@ -433,69 +433,35 @@
         
         // If the cloud returns a record with history
         if (cloudData && (cloudData.syncCount > 0 || cloudData.lastBaseline > 0)) {
-            // Force the global calibration object to use cloud values
-            cal.personalOffset = parseFloat(cloudData.personalOffset) || 0; // This is now calculated in cloud
-            cal.intercept = parseFloat(cloudData.intercept) || defaultCal.intercept; // Use defaultCal.intercept as fallback
-            cal.syncCount = parseInt(cloudData.syncCount) || 0; // This is now calculated in cloud
+            // 1. Restore Calibration
+            cal.coefA = parseFloat(cloudData.coefA) || defaultCal.coefA;
+            cal.coefB = parseFloat(cloudData.coefB) || defaultCal.coefB;
+            cal.intercept = parseFloat(cloudData.intercept) || defaultCal.intercept;
             cal.bInt = parseFloat(cloudData.lastBaseline) || 120000;
-            // 1. Update the Calibration Object with Cloud Learning
-            cal.coefA = cloudData.coefA;
-            cal.coefB = cloudData.coefB;
-                       
-            // 2. Fix the 0% Accuracy Bug
             cal.finalAccuracyPercent = cloudData.accuracy || 0;
-            
-            // DYNAMIC INITIALIZATION: Prime the Stability Shield with the last known good state.
-            // If cloud has a lastVal (e.g. your 201), use it. Otherwise, fallback to a safe middle-ground.
+            cal.syncCount = parseInt(cloudData.syncCount) || 0;
+
+            // 2. Fix the NaN: Force initialize the Stability Shield
             lastValidatedGlucose = parseFloat(cloudData.lastVal) || 150;
-            console.log("Stability Shield Initialized at: " + lastValidatedGlucose);
-
-            if (cloudData.lastBaseline > 0) {
-            cal.bInt = cloudData.lastBaseline; // Force hardware baseline restoration
-            console.log("Hardware Baseline Restored: " + cal.bInt);
-            }
-            cal.personalOffset = cloudData.personalOffset || 0; // Apply learned offset
-            // 3. Prevent the "Enrolment Loop" by restoring the hardware baseline
-            if (cloudData.lastBaseline > 0) {
-                cal.bInt = cloudData.lastBaseline;
-                // Update local enrollment state so it doesn't prompt for a new scan
-                enrollmentData = { 
-                    name: name, 
-                    baseline: cloudData.lastBaseline, 
-                    type: "CLOUD_REVIVED" 
-                };
-                localStorage.setItem('tathya_enroll_mac', JSON.stringify(enrollmentData));
-            }
-
-            // NEW: Restore the last known kinetic state from the cloud
-            if (cloudData.lastTimestamp && cloudData.lastAbsorbance) {
-                lastKineticState = {
-                    time: cloudData.lastTimestamp, // The time of the last measurement
-                    abs: parseFloat(cloudData.lastAbsorbance), // The absorbance of the last measurement
-                    velocity: cloudData.lastVelocity || 0 // The smoothed velocity at that time
-                };
-                // Restore the "flywheel" so the trend continues across sessions
-                smoothedVelocity = cloudData.lastVelocity || 0;
-                console.log("Kinetic state restored from cloud. Resuming trend analysis.");
-                console.log("Smoothed Velocity flywheel restored to: " + smoothedVelocity.toFixed(4));
-            }
-
-            // 4. Save to local storage and refresh the Dashboard UI
-            cal = sanitizeCal(cal);
+            
+            // 3. KILL THE ENROLLMENT MODAL
+            enrollmentData = { 
+                name: name, 
+                baseline: cal.bInt, 
+                type: "CLOUD_REVIVED" 
+            };
+            localStorage.setItem('tathya_enroll_mac', JSON.stringify(enrollmentData));
+            
+            // UI Cleanup
+            document.getElementById('enrollModal').classList.remove('visible');
             saveCal();
             updateUI();
             
-            if (showAlert) {
-                alert("Tathya Memory Revived: " + name + " (Level " + cal.syncCount + ")");
-            }
-            console.log("Cloud Data Applied. Current Accuracy: " + cal.finalAccuracyPercent.toFixed(1) + "%");
+            if (showAlert) alert("Tathya Memory Revived: " + name);
             return true;
         }
         return false;
-    } catch(e) { 
-        console.error("Revive Error:", e); 
-        return false; 
-    }
+    } catch(e) { return false; }
 }
     async function startEnrollStep() {
         if(!isConnected) return alert("Sensor not connected.");
@@ -1074,31 +1040,41 @@
      */
     function analyzeWithStabilityShield(baseline, currentR) {
         let currentAbs = Math.log(baseline / currentR);
+        
+        // Safety check: If lastValidatedGlucose is somehow still NaN, 
+        // we fallback to the static prediction to 're-prime' the shield.
+        if (isNaN(lastValidatedGlucose) || lastValidatedGlucose === undefined) {
+            lastValidatedGlucose = (cal.coefA * Math.pow(currentAbs, 2)) + (cal.coefB * currentAbs) + cal.intercept;
+        }
+
         let staticPred = (cal.coefA * Math.pow(currentAbs, 2)) + (cal.coefB * currentAbs) + cal.intercept;
 
-        let timeDelta = (Date.now() - lastKineticState.time) / 60000;
-        if (timeDelta < 0.1) timeDelta = 1.0; // Prevent division by zero
+        let timeNow = Date.now();
+        let timeDelta = (timeNow - lastKineticState.time) / 60000;
+        if (timeDelta < 0.1 || timeDelta > 60) timeDelta = 1.0; 
 
         let rawVelocity = (currentAbs - lastKineticState.abs) / timeDelta;
         
         // We reduce damping to 0.6 so it catches the 200+ spikes faster
         smoothedVelocity = (0.4 * rawVelocity) + (0.6 * smoothedVelocity);
         
+        // Kinetic Gain tuned for 250+ tracking
         let kineticAdjustment = smoothedVelocity * -35000;
         let rawFinal = staticPred + kineticAdjustment;
 
-        let maxChange = timeDelta * 4.0; // Increased to 4.0 for faster 250+ tracking
+        // Stability Shield: Allows a 4.0 mg/dL per minute climb (Spike Speed)
+        let maxChange = timeDelta * 4.0; 
         let changeRequest = rawFinal - lastValidatedGlucose;
         
         let validatedChange = Math.max(-maxChange, Math.min(maxChange, changeRequest));
         let finalGlucose = lastValidatedGlucose + validatedChange;
 
-        // --- FIX: Store velocity so it appears in your logs ---
+        // Memory Update
         lastValidatedGlucose = finalGlucose;
         lastKineticState = { 
             abs: currentAbs, 
-            time: Date.now(), 
-            velocity: smoothedVelocity // Fixed: Now correctly passed to finishAnalysis
+            time: timeNow, 
+            velocity: smoothedVelocity 
         };
 
         return Math.max(70, Math.min(350, finalGlucose));
