@@ -429,62 +429,32 @@
         });
         const cloudData = await resp.json();
         
-        // If the cloud returns a record with history
         if (cloudData && (cloudData.syncCount > 0 || cloudData.lastBaseline > 0)) {
-            // Force the global calibration object to use cloud values
-            cal.personalOffset = parseFloat(cloudData.personalOffset) || 0; // This is now calculated in cloud
-            cal.intercept = parseFloat(cloudData.intercept) || defaultCal.intercept; // Use defaultCal.intercept as fallback
-            cal.syncCount = parseInt(cloudData.syncCount) || 0; // This is now calculated in cloud
-            cal.bInt = parseFloat(cloudData.lastBaseline) || 120000;
-            // 1. Update the Calibration Object with Cloud Learning
+            // 1. Restore the "Brain" (Coefficients)
             cal.coefA = cloudData.coefA;
             cal.coefB = cloudData.coefB;
-                       
-            // 2. Fix the 0% Accuracy Bug
+            cal.intercept = cloudData.intercept || defaultCal.intercept;
+            cal.personalOffset = cloudData.personalOffset || 0;
             cal.finalAccuracyPercent = cloudData.accuracy || 0;
+            cal.syncCount = parseInt(cloudData.syncCount) || 0;
+
+            // 2. ROOT FIX: UNLOCK THE HARDWARE BASELINE
+            // We NO LONGER force cal.bInt = cloudData.lastBaseline.
+            // This allows the hardware to re-calibrate to the afternoon sun/temp.
             
-            if (cloudData.lastBaseline > 0) {
-            cal.bInt = cloudData.lastBaseline; // Force hardware baseline restoration
-            console.log("Hardware Baseline Restored: " + cal.bInt);
-            }
-            cal.personalOffset = cloudData.personalOffset || 0; // Apply learned offset
-            // 3. Prevent the "Enrolment Loop" by restoring the hardware baseline
-            if (cloudData.lastBaseline > 0) {
-                cal.bInt = cloudData.lastBaseline;
-                // Update local enrollment state so it doesn't prompt for a new scan
-                enrollmentData = { 
-                    name: name, 
-                    baseline: cloudData.lastBaseline, 
-                    type: "CLOUD_REVIVED" 
-                };
-                localStorage.setItem('tathya_enroll_mac', JSON.stringify(enrollmentData));
-            }
+            // 3. Keep the Identity but allow new Enrollment if bInt is missing
+            enrollmentData = { name: name, density: "Revived", baseline: cal.bInt };
+            localStorage.setItem('tathya_enroll_mac', JSON.stringify(enrollmentData));
 
-            // NEW: Restore the last known kinetic state from the cloud
-            if (cloudData.lastTimestamp && cloudData.lastAbsorbance) {
-                lastKineticState = {
-                    time: cloudData.lastTimestamp,
-                    abs: parseFloat(cloudData.lastAbsorbance)
-                };
-                console.log("Kinetic state restored from cloud:", lastKineticState);
-            }
-
-            // 4. Save to local storage and refresh the Dashboard UI
             cal = sanitizeCal(cal);
             saveCal();
             updateUI();
             
-            if (showAlert) {
-                alert("Tathya Memory Revived: " + name + " (Level " + cal.syncCount + ")");
-            }
-            console.log("Cloud Data Applied. Current Accuracy: " + cal.finalAccuracyPercent.toFixed(1) + "%");
+            if (showAlert) alert("Memory Revived: " + name + " (Baseline Unlocked)");
             return true;
         }
         return false;
-    } catch(e) { 
-        console.error("Revive Error:", e); 
-        return false; 
-    }
+    } catch(e) { return false; }
 }
     async function startEnrollStep() {
         if(!isConnected) return alert("Sensor not connected.");
