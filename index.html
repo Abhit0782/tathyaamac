@@ -429,32 +429,62 @@
         });
         const cloudData = await resp.json();
         
+        // If the cloud returns a record with history
         if (cloudData && (cloudData.syncCount > 0 || cloudData.lastBaseline > 0)) {
-            // 1. Restore the "Brain" (Coefficients)
+            // Force the global calibration object to use cloud values
+            cal.personalOffset = parseFloat(cloudData.personalOffset) || 0; // This is now calculated in cloud
+            cal.intercept = parseFloat(cloudData.intercept) || defaultCal.intercept; // Use defaultCal.intercept as fallback
+            cal.syncCount = parseInt(cloudData.syncCount) || 0; // This is now calculated in cloud
+            cal.bInt = parseFloat(cloudData.lastBaseline) || 120000;
+            // 1. Update the Calibration Object with Cloud Learning
             cal.coefA = cloudData.coefA;
             cal.coefB = cloudData.coefB;
-            cal.intercept = cloudData.intercept || defaultCal.intercept;
-            cal.personalOffset = cloudData.personalOffset || 0;
+                       
+            // 2. Fix the 0% Accuracy Bug
             cal.finalAccuracyPercent = cloudData.accuracy || 0;
-            cal.syncCount = parseInt(cloudData.syncCount) || 0;
-
-            // 2. ROOT FIX: UNLOCK THE HARDWARE BASELINE
-            // We NO LONGER force cal.bInt = cloudData.lastBaseline.
-            // This allows the hardware to re-calibrate to the afternoon sun/temp.
             
-            // 3. Keep the Identity but allow new Enrollment if bInt is missing
-            enrollmentData = { name: name, density: "Revived", baseline: cal.bInt };
-            localStorage.setItem('tathya_enroll_mac', JSON.stringify(enrollmentData));
+            if (cloudData.lastBaseline > 0) {
+            cal.bInt = cloudData.lastBaseline; // Force hardware baseline restoration
+            console.log("Hardware Baseline Restored: " + cal.bInt);
+            }
+            cal.personalOffset = cloudData.personalOffset || 0; // Apply learned offset
+            // 3. Prevent the "Enrolment Loop" by restoring the hardware baseline
+            if (cloudData.lastBaseline > 0) {
+                cal.bInt = cloudData.lastBaseline;
+                // Update local enrollment state so it doesn't prompt for a new scan
+                enrollmentData = { 
+                    name: name, 
+                    baseline: cloudData.lastBaseline, 
+                    type: "CLOUD_REVIVED" 
+                };
+                localStorage.setItem('tathya_enroll_mac', JSON.stringify(enrollmentData));
+            }
 
+            // NEW: Restore the last known kinetic state from the cloud
+            if (cloudData.lastTimestamp && cloudData.lastAbsorbance) {
+                lastKineticState = {
+                    time: cloudData.lastTimestamp,
+                    abs: parseFloat(cloudData.lastAbsorbance)
+                };
+                console.log("Kinetic state restored from cloud:", lastKineticState);
+            }
+
+            // 4. Save to local storage and refresh the Dashboard UI
             cal = sanitizeCal(cal);
             saveCal();
             updateUI();
             
-            if (showAlert) alert("Memory Revived: " + name + " (Baseline Unlocked)");
+            if (showAlert) {
+                alert("Tathya Memory Revived: " + name + " (Level " + cal.syncCount + ")");
+            }
+            console.log("Cloud Data Applied. Current Accuracy: " + cal.finalAccuracyPercent.toFixed(1) + "%");
             return true;
         }
         return false;
-    } catch(e) { return false; }
+    } catch(e) { 
+        console.error("Revive Error:", e); 
+        return false; 
+    }
 }
     async function startEnrollStep() {
         if(!isConnected) return alert("Sensor not connected.");
@@ -746,12 +776,6 @@
         return { score: Math.min(score, 100), vascularRatio: vascularRatio };
     }
 
-    function getStandardDeviation(array) {
-        const n = array.length;
-        const mean = array.reduce((a, b) => a + b) / n;
-        return Math.sqrt(array.map(x => Math.pow(x - mean, 2)).reduce((a, b) => a + b) / n);
-    }
-
     function finishAnalysisRecursive(baseline) {
         sendCommand("STOP"); // Tell ESP32 to stop sending data
         clearInterval(confidenceTimer);
@@ -787,52 +811,50 @@
         }
         lastKineticState = { abs: abs, time: now, velocity: velocity };
 
-        // --- 5D HYBRID MATRIX UPGRADE ---
+        // --- SUPERSMART AUTONOMOUS FILTERING ---
 
-        // 1. Photoacoustic Rise-Time (Viscosity Analysis)
-        let riseTimes = topPulses.map(p => {
-            let wave = p.segment.map(s => s.r);
-            let peakIdx = wave.indexOf(Math.max(...wave));
-            return peakIdx * 20; // ms at 50Hz
-        });
-        let avgRiseTime = riseTimes.reduce((a,b)=>a+b,0)/riseTimes.length;
-        let viscosityFactor = (avgRiseTime - 120) * 0.5; // Correction based on wave "sluggishness"
+        // 1. AUC (Area Under Curve) Density Analysis
+        // Analyzes the "thickness" of the blood pulse to verify sugar levels.
+        let ppgValues = buffer.map(b => b.r);
+        let meanPPG = ppgValues.reduce((a,b) => a+b, 0) / ppgValues.length;
+        let areaUnderCurve = ppgValues.reduce((a,b) => a + Math.abs(b - meanPPG), 0);
+        let opticalDensityFactor = (areaUnderCurve / meanPPG) * 10; 
 
-        // 2. Multi-Wavelength Optical Isomer (Scatter Ratio)
-        let redSD = getStandardDeviation(buffer.map(b => b.r));
-        let irSD = getStandardDeviation(buffer.map(b => b.ir));
-        let scatterRatio = (redSD / irSD);
-        let isomerCorrection = (scatterRatio - 1.2) * 15; // Rotational scattering offset
+        // 2. Base Prediction Calculation
+        let basePred = (cal.coefA * Math.pow(abs, 2)) + (cal.coefB * abs) + cal.intercept;
 
-        // 3. Thermal Gradient Compensation
-        let currentTemp = sensorData.t || 30; // Celsius
-        let thermalOffset = (currentTemp - 36.5) * 3.7; // 3.7mg/dL per degree Celsius
-
-        // 4. Circadian Clock Layer
-        let hour = new Date().getHours();
-        let circadianBias = (hour > 18 || hour < 6) ? 12 : -5; // Evening resistance vs Morning sensitivity
-
-        // 1. Calculate the raw physics base
-        let base = (cal.coefA * Math.pow(abs, 2)) + (cal.coefB * abs) + cal.intercept;
+        // 3. Stiffness & Density Hybrid Correction
+        let stiffnessCorrection = 0;
+        let vascularRatio = topPulses[0].vascularRatio || 45;
+        if (vascularRatio < 40) {
+            stiffnessCorrection = (40 - vascularRatio) * 0.8; 
+        }
+        // Add density factor: Sugary blood is "denser" and changes the pulse shape.
+        let densityAdjustment = (opticalDensityFactor - 5) * 2; 
         
-        // 2. Determine Metabolic Phase (Spike vs. Flat)
-        let isSpiking = (smoothedVelocity > 1.2 || (hour > 18 && base > 180)); 
-        let phaseFactor = isSpiking ? 1.4 : 1.0; 
+        let rawPred = basePred - stiffnessCorrection + densityAdjustment + (cal.personalOffset || 0);
 
-        // 3. Apply phase-aware Viscosity and Density adjustments
-        let adjustedViscosity = viscosityFactor * phaseFactor; 
-
-        // 4. FINAL PREDICTION (Consolidated)
-        let rawPred = base + adjustedViscosity + isomerCorrection - thermalOffset + circadianBias;
-
-        // 5. Apply Adaptive Kalman Filter based on the Phase
-        let confidence = parseInt(document.getElementById('confPercent').innerText) || 50;
+        // 4. KALMAN FILTER (Autonomous Stability)
+        // Prevents the result from jumping 70 points unless the sensor is 100% sure.
         if (history.length > 0) {
-            let lastVal = history[0].val;
-            let pUncertainty = isSpiking ? 30 : 15; // Looser filter to catch the spike peak
-            let sUncertainty = (100 - confidence);
-            let kalmanGain = pUncertainty / (pUncertainty + sUncertainty);
+            let lastVal = history.find(h => h.actual !== "--")?.actual || history[0].val;
+            let timeElapsed = (Date.now() - lastKineticState.time) / 60000;
+            
+            // Calculate trust levels
+            let predictionUncertainty = 15; // Internal model confidence
+            let sensorUncertainty = (100 - (parseInt(document.getElementById('confPercent').innerText) || 50)); 
+            
+            // Kalman Gain: Do we trust the History or the New Scan?
+            let kalmanGain = predictionUncertainty / (predictionUncertainty + sensorUncertainty);
+            
+            // Blend the two states
             rawPred = lastVal + kalmanGain * (rawPred - lastVal);
+            
+            // Final Biological "Speed Limit"
+            let maxBioChange = 4.0 * timeElapsed; // Set to 4.0 for faster post-meal tracking
+            if (Math.abs(rawPred - lastVal) > maxBioChange) {
+                rawPred = lastVal + (Math.sign(rawPred - lastVal) * maxBioChange);
+            }
         }
 
         let finalVal = Math.round(rawPred);
@@ -1006,56 +1028,54 @@
         el.innerText = msg; el.style.color = color;
     }
 
-    async function syncCal() {
+    function syncCal() {
         const actual = parseFloat(document.getElementById('meterVal').value);
         if(!actual || history.length < 1) return alert("Scan first, then enter meter value.");
         
         const lastScan = history[0];
-        const predictedVal = parseFloat(lastScan.val);
-
-        // 1. Update local history
-        history[0].actual = actual;
-        history[0].type = "SYNC";
-        localStorage.setItem('tathya_hist_mac', JSON.stringify(history));
+        const abs = parseFloat(lastScan.absorbance);
         
-        // 2. Local Accuracy tracking
+        // Learning should be based on the static model, not the real-time kinetic adjustment
+        const modelPrediction = (cal.coefA * Math.pow(abs, 2)) + (cal.coefB * abs) + cal.intercept;
+        const newOffset = actual - modelPrediction;
+
+        cal.personalOffset = cal.personalOffset || 0;
+        const weight = 1 / ((cal.syncCount || 0) + 2); 
+        cal.personalOffset = (cal.personalOffset * (1 - weight)) + (newOffset * weight);
+        cal.syncCount = (cal.syncCount || 0) + 1;
+
+        // Update Accuracy
+        const predictedVal = parseFloat(lastScan.val);
         const currentError = Math.abs(predictedVal - actual) / actual;
         const currentAcc = Math.max(0, 100 - (currentError * 100));
-        cal.syncCount = (cal.syncCount || 0) + 1;
         const prevCount = cal.syncCount - 1;
-        cal.finalAccuracyPercent = prevCount > 0 ? ((cal.finalAccuracyPercent * prevCount) + currentAcc) / cal.syncCount : currentAcc;
+        const currentAvg = cal.finalAccuracyPercent || 0;
+        cal.finalAccuracyPercent = prevCount > 0 ? ((currentAvg * prevCount) + currentAcc) / cal.syncCount : currentAcc;
 
-        updateStatus("UPLOADING 5D SYNC...", "#2196f3");
-
-        // 3. Send Sync to Cloud
-        await fetch(GOOGLE_SCRIPT_URL, {
-            method: "POST",
-            mode: "no-cors",
-            body: JSON.stringify({
-                name: enrollmentData.name,
-                type: "SYNC",
-                val: predictedVal,
-                actual: actual,
-                finger: currentFinger,
-                date: new Date().toLocaleDateString(),
-                time: new Date().toLocaleTimeString(),
-                absorbance: lastScan.absorbance,
-                temp: lastScan.temp,
-                coefA: cal.coefA, 
-                coefB: cal.coefB,
-                intercept: cal.intercept,
-                velocity: lastScan.velocity,
-                vascularRatio: lastScan.vascularRatio,
-                confidence: lastScan.confidence
-            })
-        });
-
-        // 4. THE "SMART" FIX: Fetch the updated Slope (CoefB) and Intercept from the cloud
-        // This allows the Cloud's 5D logic to become the Master.
-        await reviveFromCloud(enrollmentData.name, false);
+        history[0].actual = actual;
+        history[0].type = "SYNC";
+        deepLearningOptimization();
+        saveCal();
+        localStorage.setItem('tathya_hist_mac', JSON.stringify(history));
         
         updateUI(); renderLog(); 
-        alert("Extreme Smart Sync Complete! Slope & Intercept Updated.");
+        alert("Hardware Profile Updated!");
+
+        // Send Sync to Cloud
+        sendToDatabase({
+            name: enrollmentData ? enrollmentData.name : "Anonymous", // ADD THIS LINE
+            type: "SYNC",
+            val: predictedVal,
+            actual: actual,
+            finger: currentFinger,
+            date: new Date().toLocaleDateString(),
+            time: new Date().toLocaleTimeString(),
+            absorbance: abs.toFixed(4),
+            temp: lastScan.temp,
+            coefA: cal.coefA, // Send current coefficients to be logged
+            coefB: cal.coefB,
+            intercept: cal.intercept
+        });
     }
 
     function optimizeCoefficients() {
