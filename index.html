@@ -830,7 +830,10 @@
             stiffnessCorrection = (40 - vascularRatio) * 0.8; 
         }
         // Add density factor: Sugary blood is "denser" and changes the pulse shape.
-        let densityAdjustment = (opticalDensityFactor - 5) * 2; 
+       let densityAdjustment = (opticalDensityFactor - 5) * 2; 
+        if (abs < 0.05) {
+            densityAdjustment = Math.min(densityAdjustment, 20); // Max +20 mg/dL if signal is too clear
+        }
         
         let rawPred = basePred - stiffnessCorrection + densityAdjustment + (cal.personalOffset || 0);
 
