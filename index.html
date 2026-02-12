@@ -832,9 +832,10 @@
         // Add density factor: Sugary blood is "denser" and changes the pulse shape.
        let densityAdjustment = (opticalDensityFactor - 5) * 2; 
         if (abs < 0.05) {
-            densityAdjustment = Math.min(densityAdjustment, 20); // Max +20 mg/dL if signal is too clear
+            // Cap the density penalty globally to +30 mg/dL. 
+        // This prevents 'Phantom Spikes' while still allowing for sensitivity.
+            densityAdjustment = Math.max(-20, Math.min(densityAdjustment, 30));
         }
-        
         let rawPred = basePred - stiffnessCorrection + densityAdjustment + (cal.personalOffset || 0);
 
         // 4. KALMAN FILTER (Autonomous Stability)
